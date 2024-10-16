@@ -1,0 +1,10 @@
+services:
+  app:
+    build: .
+    container_name: flowise-openai-wrapper
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    depends_on:
+      - flowise

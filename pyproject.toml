@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "fastflowwrapper"
+version = "0.1.0"
+description = ""
+authors = ["Abdullah Alqahtani <0xqahta0@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.115.2"
+uvicorn = "^0.32.0"
+pydantic = "^2.9.2"
+requests = "^2.32.3"
+pydantic-settings = "^2.5.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
