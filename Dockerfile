@@ -1,17 +1,23 @@
+# Use the official Python image from the Docker Hub
 FROM python:3.11-slim
 
+# Set the working directory in the container
 WORKDIR /app
 
-COPY pyproject.toml ./
-COPY poetry.lock ./
+# Copy the requirements file
+COPY pyproject.toml poetry.lock* ./
 
-RUN pip install --no-cache-dir poetry
+# Install Poetry
+RUN pip install poetry
 
-RUN poetry config virtualenvs.create false \
-    && poetry install --no-dev --no-interaction --no-ansi
+# Install dependencies
+RUN poetry config virtualenvs.create false && poetry install
 
-COPY app ./app
+# Copy the rest of the application code
+COPY . .
 
-EXPOSE 8080
+# Expose the FastAPI application port
+EXPOSE 8000
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Command to run the FastAPI app
+CMD ["poetry", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
