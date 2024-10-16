@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 
@@ -22,9 +22,13 @@ class ChatMessage(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
+    stream: bool = Field(default=False)
     model: str
     messages: List[ChatMessage]
     temperature: Optional[float] = None
+    session_id: Optional[str] = None
+    chat_id: Optional[str] = None
+    id: Optional[str] = None
 
 
 class ChatChoice(BaseModel):
