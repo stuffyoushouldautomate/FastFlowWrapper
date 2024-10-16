@@ -48,7 +48,7 @@ def get_models():
             created=iso_to_unix(chatflow.createdDate),
             owned_by="flowise_user",
             name=chatflow.name,
-            model_type="flowise", 
+            type_="flowise",
         )
         openai_models.append(model)
 

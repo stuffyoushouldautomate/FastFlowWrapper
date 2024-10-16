@@ -8,7 +8,7 @@ class OpenAIModel(BaseModel):
     created: int
     owned_by: str
     name: Optional[str] = None
-    model_type: Optional[str] = None
+    type_: Optional[str] = None
 
 
 class OpenAIModelsResponse(BaseModel):
