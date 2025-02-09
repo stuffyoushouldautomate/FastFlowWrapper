@@ -24,11 +24,15 @@ class ChatMessage(BaseModel):
 class ChatCompletionRequest(BaseModel):
     stream: bool = Field(default=False)
     model: str
-    messages: List[ChatMessage]
+    messages: Optional[List[ChatMessage]] = None
+    content: Optional[str] = None  # Added for Thrive format
     temperature: Optional[float] = None
     session_id: Optional[str] = None
     chat_id: Optional[str] = None
     id: Optional[str] = None
+
+    class Config:
+        extra = "allow"  # Allow additional fields
 
 
 class ChatChoice(BaseModel):

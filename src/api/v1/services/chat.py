@@ -4,6 +4,8 @@ import json
 from src.config.config import Settings
 import logging
 from fastapi import HTTPException
+import time
+import uuid
 
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
@@ -78,15 +80,16 @@ def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
 
 async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        messages = body.get("messages", [])
-        if not messages:
-            raise ValueError("No messages provided in the request.")
-
-        latest_message = messages[-1]
-        if latest_message.get("role", "").lower() != "user":
-            raise ValueError("The latest message must be from the user.")
-
-        flowise_request_data = {"question": latest_message.get("content", "")}
+        # Handle both standard OpenAI format and Thrive format
+        content = body.get("content") if "content" in body else None
+        if content is None:
+            # Try OpenAI format
+            messages = body.get("messages", [])
+            if not messages:
+                raise ValueError("No messages provided in the request.")
+            content = messages[-1].get("content", "")
+        
+        flowise_request_data = {"question": content}
 
         FLOWISE_PREDICTION_URL = (
             f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
@@ -95,7 +98,27 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         flowise_response = fetch_flowise_response(
             FLOWISE_PREDICTION_URL, flowise_request_data
         )
-        return flowise_response
+
+        # Transform Flowise response to OpenAI format
+        return {
+            "id": f"chatcmpl-{str(uuid.uuid4())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": body.get("model", "thriveai/gpt-4o"),  # Updated model name to match Thrive
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": flowise_response.get("text", "")
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
+        }
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
