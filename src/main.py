@@ -11,8 +11,4 @@ app.include_router(api_router)
 
 @app.get("/", tags=["Root"])
 async def read_root():
-    return {"message": "Welcome to the Flowise OpenAI Wrapper API"}
-
-@app.get("/")
-async def root():
     return {"status": "ok", "message": "FastAPI Flowise Wrapper is running"}
