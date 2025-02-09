@@ -81,15 +81,24 @@ def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
 async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     try:
         # Handle both standard OpenAI format and Thrive format
-        content = body.get("content") if "content" in body else None
-        if content is None:
-            # Try OpenAI format
-            messages = body.get("messages", [])
-            if not messages:
-                raise ValueError("No messages provided in the request.")
-            content = messages[-1].get("content", "")
+        content = body.get("content")
         
-        flowise_request_data = {"question": content}
+        # If no direct content, try to get it from messages
+        if not content and "messages" in body:
+            messages = body.get("messages", [])
+            if messages:
+                content = messages[-1].get("content", "")
+        
+        if not content:
+            raise ValueError("No content provided in the request")
+
+        # Prepare request for Flowise
+        flowise_request_data = {
+            "question": content,
+            "overrideConfig": {
+                "systemMessage": "You are ThriveAI, a helpful AI assistant."
+            }
+        }
 
         FLOWISE_PREDICTION_URL = (
             f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
@@ -104,7 +113,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             "id": f"chatcmpl-{str(uuid.uuid4())}",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": body.get("model", "thrive/gpt-4o"),  # Make sure default matches
+            "model": body.get("model", "thrive/gpt-4o"),
             "choices": [{
                 "index": 0,
                 "message": {
@@ -125,4 +134,4 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="Unexpected error occurred.")
+        raise HTTPException(status_code=500, detail=f"Unexpected error occurred: {str(e)}")
