@@ -19,7 +19,9 @@ async def get_models():
     return await get_openai_models()
 
 
-@router.post("/chat/completions")
+# Keep both endpoints to handle different client paths
+@router.post("/v1/chat/completions", tags=["Completions"])
+@router.post("/chat/completions", tags=["Completions"])
 async def chat_completion(
     body: Dict[str, Any],
     stream: bool = Query(default=False)

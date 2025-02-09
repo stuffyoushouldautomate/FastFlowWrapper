@@ -46,7 +46,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, N
         flowise_request_data = {"question": latest_message.get("content", "")}
 
         FLOWISE_PREDICTION_URL = (
-            f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
+            f"{settings.flowise_api_base_url}/api/v1/prediction/{settings.flowise_chatflow_id}"
         )
 
         generator = fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data)
@@ -101,7 +101,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         }
 
         FLOWISE_PREDICTION_URL = (
-            f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
+            f"{settings.flowise_api_base_url}/api/v1/prediction/{settings.flowise_chatflow_id}"
         )
 
         flowise_response = fetch_flowise_response(
