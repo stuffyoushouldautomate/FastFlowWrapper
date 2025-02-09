@@ -9,10 +9,10 @@ async def get_openai_models() -> ResponseModel:
     # Return a static model list
     openai_models: List[OpenAIModel] = [
         OpenAIModel(
-            id="thriveai/gpt-4o",
+            id="thrive/gpt-4o",
             object="model",
             created=int(time.time()),
-            owned_by="thriveai",
+            owned_by="thrive",
             name="ThriveAI GPT-4",
             type_="chat"
         )
