@@ -80,10 +80,9 @@ def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
 
 async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        # Handle both standard OpenAI format and Thrive format
+        # Extract content from either direct content or messages
         content = body.get("content")
         
-        # If no direct content, try to get it from messages
         if not content and "messages" in body:
             messages = body.get("messages", [])
             if messages:
@@ -92,11 +91,12 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         if not content:
             raise ValueError("No content provided in the request")
 
-        # Prepare request for Flowise
+        # Prepare request for Flowise with your specific model
         flowise_request_data = {
             "question": content,
             "overrideConfig": {
-                "systemMessage": "You are ThriveAI, a helpful AI assistant."
+                "systemMessage": "You are ThriveAI, a helpful AI assistant.",
+                "modelName": "d81291ea-79b8-40fa-8752-80403ed5cf09"  # Your specific model UUID
             }
         }
 
@@ -108,7 +108,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             FLOWISE_PREDICTION_URL, flowise_request_data
         )
 
-        # Transform Flowise response to OpenAI format
+        # Transform Flowise response to match working format
         return {
             "id": f"chatcmpl-{str(uuid.uuid4())}",
             "object": "chat.completion",
