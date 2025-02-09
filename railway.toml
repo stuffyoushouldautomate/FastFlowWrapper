@@ -5,6 +5,4 @@ buildCommand = "pip install poetry && poetry install --no-root"
 [deploy]
 startCommand = "poetry run uvicorn src.main:app --host 0.0.0.0 --port $PORT --workers 1"
 healthcheckPath = "/"
-healthcheckTimeout = 200
-restartPolicyType = "on-failure"
-restartPolicyMaxRetries = 5 
+healthcheckTimeout = 200 
