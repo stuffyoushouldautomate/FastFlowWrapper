@@ -13,7 +13,7 @@ async def get_openai_models() -> ResponseModel:
             object="model",
             created=int(time.time()),
             owned_by="thrive",
-            name="ThriveAI GPT-4",
+            name="Thrive GPT-4o",
             type_="chat"
         )
     ]

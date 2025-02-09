@@ -104,7 +104,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             "id": f"chatcmpl-{str(uuid.uuid4())}",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": body.get("model", "thriveai/gpt-4o"),  # Updated model name to match Thrive
+            "model": body.get("model", "thrive/gpt-4o"),  # Make sure default matches
             "choices": [{
                 "index": 0,
                 "message": {
