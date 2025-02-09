@@ -1,0 +1,8 @@
+[build]
+builder = "nixpacks"
+buildCommand = "pip install poetry && poetry install --no-root"
+
+[deploy]
+startCommand = "poetry run uvicorn src.main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/v1/models"
+healthcheckTimeout = 100 

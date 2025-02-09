@@ -4,20 +4,16 @@ FROM python:3.11-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Copy the requirements file
+# Copy dependency files first
 COPY pyproject.toml poetry.lock* ./
+COPY README.md ./
 
-# Install Poetry
+# Install Poetry and dependencies
 RUN pip install poetry
-
-# Install dependencies
-RUN poetry config virtualenvs.create false && poetry install
+RUN poetry config virtualenvs.create false && poetry install --no-root
 
 # Copy the rest of the application code
 COPY . .
 
-# Expose the FastAPI application port
-EXPOSE 8000
-
-# Command to run the FastAPI app
-CMD ["poetry", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+# Use Railway's PORT environment variable
+CMD ["sh", "-c", "poetry run uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8080} --reload"]
