@@ -20,9 +20,8 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
             response.raise_for_status()
             logger.info("Connected to Flowise stream")
             
-            # Track if we've started content
-            has_started = False
-            current_content = ""
+            # Track the full message
+            full_message = ""
             
             for line in response.iter_lines():
                 if not line:
@@ -41,16 +40,10 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
                         data = json.loads(decoded_line.replace("data:", "").strip())
                         
                         # Handle different Flowise events
-                        if event_type == "start":
-                            # Initial response
-                            if not has_started:
-                                has_started = True
-                                yield "data: {}\n\n"
-                        
-                        elif event_type == "token":
-                            # Stream tokens in OpenAI format
+                        if event_type == "token":
                             token = data
                             if token:
+                                full_message += token
                                 response = {
                                     "id": f"chatcmpl-{str(uuid.uuid4())}",
                                     "object": "chat.completion.chunk",
@@ -65,15 +58,13 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
                                     }]
                                 }
                                 yield f"data: {json.dumps(response)}\n\n"
-                                current_content += token
                         
                         elif event_type == "end":
-                            # End of stream
+                            # Send final message
                             yield "data: [DONE]\n\n"
                             break
                         
                         elif event_type == "error":
-                            # Handle error
                             error_msg = data.get("error", "Unknown error")
                             logger.error(f"Flowise error: {error_msg}")
                             yield f'data: {{"error": "{error_msg}"}}\n\n'
