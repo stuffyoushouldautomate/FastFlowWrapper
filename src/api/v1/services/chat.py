@@ -13,22 +13,9 @@ settings = Settings()
 
 def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None, None]:
     try:
-        # Format request for Flowise
-        flowise_data = {
-            "question": payload["question"],
-            "history": [
-                {
-                    "role": "assistant",
-                    "message": "I am ready to help you. What would you like to know?"
-                }
-            ],
-            "overrideConfig": {
-                "systemMessage": "You are a helpful AI assistant."
-            }
-        }
-        
+        # Send the full payload to Flowise including history
         with requests.post(
-            flowise_url, json=flowise_data, stream=True, timeout=30
+            flowise_url, json=payload, stream=True, timeout=30
         ) as response:
             response.raise_for_status()
             for line in response.iter_lines():
@@ -43,7 +30,7 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                             text = data.get("text", "")
                             
                             if text:  # Only yield if there's actual content
-                                if payload.get("object") == "message":  # Thrive format
+                                if "object" in payload and payload["object"] == "message":  # Thrive format
                                     response = {
                                         "object": "message",
                                         "id": str(uuid.uuid4()),
@@ -93,17 +80,25 @@ async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, N
                 raise ValueError("No messages provided in the request.")
             content = messages[-1].get("content", "")
 
+        # Extract conversation history from Thrive format
+        conversation = body.get("conversation", {})
+        history = []
+        
+        if conversation:
+            # Get previous messages from conversation
+            prev_messages = conversation.get("messages", [])
+            for msg in prev_messages:
+                history.append({
+                    "role": msg.get("role", "user"),
+                    "message": msg.get("content", "")
+                })
+
         # Format request for Flowise with chat history
         flowise_request_data = {
             "question": content,
-            "history": [
-                {
-                    "role": "assistant",
-                    "message": "I am ready to help you. What would you like to know?"
-                }
-            ],
+            "history": history,
             "overrideConfig": {
-                "systemMessage": "You are a helpful AI assistant."
+                "systemMessage": "You are ThriveAI, an expert in digital transformation and organizational development."
             }
         }
 
@@ -115,10 +110,11 @@ async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, N
         request_format = {
             "question": content,
             "object": body.get("object"),
-            "model": body.get("model", "thrive/gpt-4o")
+            "model": body.get("model", "thrive/gpt-4o"),
+            "conversation": conversation
         }
 
-        for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, request_format):
+        for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
             yield chunk
 
     except ValueError as e:
