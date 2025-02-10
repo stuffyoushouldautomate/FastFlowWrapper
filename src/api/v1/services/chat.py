@@ -23,8 +23,25 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                     if decoded_line.strip() == "[DONE]":
                         break
                     if decoded_line.startswith("data:"):
-                        data = decoded_line.replace("data: ", "").strip()
-                        yield f"data: {data}\n\n"
+                        data = json.loads(decoded_line.replace("data: ", "").strip())
+                        # Transform to OpenAI streaming format
+                        chunk = {
+                            "id": f"chatcmpl-{str(uuid.uuid4())}",
+                            "object": "chat.completion.chunk",
+                            "created": int(time.time()),
+                            "model": "thrive/gpt-4o",
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "role": "assistant",
+                                    "content": data.get("text", "")
+                                },
+                                "finish_reason": None
+                            }]
+                        }
+                        yield f"data: {json.dumps(chunk)}\n\n"
+            # Send final [DONE] message
+            yield "data: [DONE]\n\n"
     except requests.RequestException as e:
         logger.error(f"Error communicating with Flowise: {e}")
         yield f'data: {{"error": "Error communicating with Flowise: {e}"}}\n\n'
@@ -55,16 +72,25 @@ async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, N
             # Stream in Thrive format
             for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
                 if chunk.startswith('data: '):
-                    data = json.loads(chunk.replace('data: ', ''))
-                    response = {
-                        "object": "message",
-                        "id": str(uuid.uuid4()),
-                        "model": body.get("model", "thrive/gpt-4o"),
-                        "role": "assistant",
-                        "content": data.get("text", ""),
-                        "created_at": int(time.time())
-                    }
-                    yield f"data: {json.dumps(response)}\n\n"
+                    try:
+                        data = json.loads(chunk.replace('data: ', ''))
+                        if isinstance(data, dict) and "choices" in data:
+                            # Extract content from OpenAI format
+                            content = data["choices"][0]["delta"].get("content", "")
+                        else:
+                            content = data.get("text", "")
+                            
+                        response = {
+                            "object": "message",
+                            "id": str(uuid.uuid4()),
+                            "model": body.get("model", "thrive/gpt-4o"),
+                            "role": "assistant",
+                            "content": content,
+                            "created_at": int(time.time())
+                        }
+                        yield f"data: {json.dumps(response)}\n\n"
+                    except json.JSONDecodeError:
+                        continue
         else:
             # Stream in OpenAI format
             for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
