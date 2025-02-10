@@ -37,31 +37,19 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
                         text = data.get("text", "")
                         
                         if text:
-                            # Match Thrive's exact response format
+                            # Use OpenAI format
                             response = {
-                                "object": "message",
-                                "id": str(uuid.uuid4()),
-                                "model": "thrive/gpt-4o",  # Keep thrive prefix for responses
-                                "role": "assistant",
-                                "content": text,
-                                "quote": None,
-                                "cost": 0,
-                                "created_at": int(time.time()),
-                                "assistant": {
-                                    "object": "assistant",
-                                    "id": "0194e030-15fe-7156-b877-f311e4a5c32b",
-                                    "name": "ThriveAI",
-                                    "expertise": "Thrive Digital Era",
-                                    "description": None,
-                                    "avatar": "https://thrive.venu.pro/uploads/1ec452e9-a0d5-4963-9e6c-f1f77e4024e0.jpg",
-                                    "created_at": 1738928035,
-                                    "updated_at": 1739159550
-                                },
-                                "parent_id": None,
-                                "user": None,
-                                "image": None,
-                                "file": None,
-                                "items": []
+                                "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                "object": "chat.completion.chunk",
+                                "created": int(time.time()),
+                                "model": "openai/gpt-4o",
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {
+                                        "content": text
+                                    },
+                                    "finish_reason": None
+                                }]
                             }
                             
                             chunk = f"data: {json.dumps(response)}\n\n"
@@ -80,23 +68,20 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
 
 async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
     try:
-        # Get content from the request
-        content = None
-        if "messages" in body:
-            messages = body["messages"]
-            if messages:
-                content = messages[-1].get("content")
-        else:
-            content = body.get("content")
-
+        # Get content from messages array (OpenAI format)
+        messages = body.get("messages", [])
+        if not messages:
+            raise ValueError("No messages provided in request")
+        
+        content = messages[-1].get("content")
         if not content:
-            raise ValueError("No content provided in request")
+            raise ValueError("No content in last message")
 
         # Format request for Flowise
         flowise_request_data = {
             "question": content,
             "overrideConfig": {
-                "systemMessage": "You are an AI assistant powered by Thrive Digital Era."
+                "systemMessage": "You are an AI assistant."
             }
         }
 
@@ -134,21 +119,18 @@ def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
 
 async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        # Get content from either format
-        content = body.get("content") if "content" in body else None
-        if content is None:
-            messages = body.get("messages", [])
-            if not messages:
-                raise ValueError("No messages provided in the request.")
-            content = messages[-1].get("content", "")
+        messages = body.get("messages", [])
+        if not messages:
+            raise ValueError("No messages provided in request")
         
-        # Get model and strip provider prefix
-        model = body.get("model", "gpt-4o").split("/")[-1]
-        
+        content = messages[-1].get("content")
+        if not content:
+            raise ValueError("No content in last message")
+
         flowise_request_data = {
             "question": content,
             "overrideConfig": {
-                "model": model
+                "systemMessage": "You are an AI assistant."
             }
         }
 
@@ -160,38 +142,26 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             FLOWISE_PREDICTION_URL, flowise_request_data
         )
 
-        # Check if the request is from Thrive (has object="message")
-        if body.get("object") == "message":
-            # Return Thrive format
-            return {
-                "object": "message",
-                "id": str(uuid.uuid4()),
-                "model": body.get("model", "openai/gpt-4o"),
-                "role": "assistant",
-                "content": flowise_response.get("text", ""),
-                "created_at": int(time.time())
+        # Return OpenAI format
+        return {
+            "id": f"chatcmpl-{str(uuid.uuid4())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": "openai/gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": flowise_response.get("text", "")
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
             }
-        else:
-            # Return OpenAI format
-            return {
-                "id": f"chatcmpl-{str(uuid.uuid4())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": body.get("model", "openai/gpt-4o"),
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": flowise_response.get("text", "")
-                    },
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0
-                }
-            }
+        }
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
