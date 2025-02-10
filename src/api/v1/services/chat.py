@@ -20,45 +20,69 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
             response.raise_for_status()
             logger.info("Connected to Flowise stream")
             
+            # Track if we've started content
+            has_started = False
+            current_content = ""
+            
             for line in response.iter_lines():
                 if not line:
                     continue
                     
                 decoded_line = line.decode("utf-8")
-                logger.info(f"Received line: {decoded_line}")
+                logger.info(f"Received line from Flowise: {decoded_line}")
                 
-                if decoded_line.strip() == "[DONE]":
-                    yield "data: [DONE]\n\n"
-                    break
-                    
-                if decoded_line.startswith("data:"):
-                    try:
-                        data = json.loads(decoded_line.replace("data: ", "").strip())
-                        text = data.get("text", "")
-                        
-                        if text:
-                            # Use OpenAI format with client's model name
-                            response = {
-                                "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                "object": "chat.completion.chunk",
-                                "created": int(time.time()),
-                                "model": "thrive/gpt-4o",
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {
-                                        "content": text
-                                    },
-                                    "finish_reason": None
-                                }]
-                            }
-                            
-                            chunk = f"data: {json.dumps(response)}\n\n"
-                            logger.info(f"Sending chunk: {chunk}")
-                            yield chunk
-                            await asyncio.sleep(0.1)
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse Flowise response: {e}")
+                try:
+                    # Parse the event and data
+                    if decoded_line.startswith("event:"):
+                        event_type = decoded_line.replace("event:", "").strip()
                         continue
+                    
+                    if decoded_line.startswith("data:"):
+                        data = json.loads(decoded_line.replace("data:", "").strip())
+                        
+                        # Handle different Flowise events
+                        if event_type == "start":
+                            # Initial response
+                            if not has_started:
+                                has_started = True
+                                yield "data: {}\n\n"
+                        
+                        elif event_type == "token":
+                            # Stream tokens in OpenAI format
+                            token = data
+                            if token:
+                                response = {
+                                    "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": "thrive/gpt-4o",
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {
+                                            "content": token
+                                        },
+                                        "finish_reason": None
+                                    }]
+                                }
+                                yield f"data: {json.dumps(response)}\n\n"
+                                current_content += token
+                        
+                        elif event_type == "end":
+                            # End of stream
+                            yield "data: [DONE]\n\n"
+                            break
+                        
+                        elif event_type == "error":
+                            # Handle error
+                            error_msg = data.get("error", "Unknown error")
+                            logger.error(f"Flowise error: {error_msg}")
+                            yield f'data: {{"error": "{error_msg}"}}\n\n'
+                            yield "data: [DONE]\n\n"
+                            break
+                            
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse Flowise response: {e}")
+                    continue
                     
     except Exception as e:
         logger.error(f"Error in fetch_flowise_stream: {e}")
@@ -68,7 +92,6 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
 
 async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
     try:
-        # Get content from messages array (OpenAI format)
         messages = body.get("messages", [])
         if not messages:
             raise ValueError("No messages provided in request")
@@ -77,7 +100,6 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, No
         if not content:
             raise ValueError("No content in last message")
 
-        # Format request for Flowise
         flowise_request_data = {
             "question": content,
             "overrideConfig": {
