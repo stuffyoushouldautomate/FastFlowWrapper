@@ -1,4 +1,4 @@
-from typing import Generator, Dict, Any
+from typing import Generator, Dict, Any, AsyncGenerator
 import requests
 import json
 from src.config.config import Settings
@@ -6,115 +6,95 @@ import logging
 from fastapi import HTTPException
 import time
 import uuid
+import asyncio
+from aiohttp import ClientSession, ClientTimeout
 
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
 
 
-def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None, None]:
-    try:
-        with requests.post(
-            flowise_url, json=payload, stream=True, timeout=30
-        ) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if line:
+async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerator[str, None]:
+    timeout = ClientTimeout(total=30)
+    async with ClientSession(timeout=timeout) as session:
+        try:
+            async with session.post(flowise_url, json=payload) as response:
+                response.raise_for_status()
+                logger.info("Connected to Flowise stream")
+                
+                async for line in response.content:
+                    if not line:
+                        continue
+                        
                     decoded_line = line.decode("utf-8")
+                    logger.info(f"Received line: {decoded_line}")
+                    
                     if decoded_line.strip() == "[DONE]":
                         yield "data: [DONE]\n\n"
                         break
+                        
                     if decoded_line.startswith("data:"):
                         try:
                             data = json.loads(decoded_line.replace("data: ", "").strip())
                             text = data.get("text", "")
                             
                             if text:
-                                model = f"openai/{payload['overrideConfig']['model']}"  # Add provider prefix
                                 response = {
-                                    "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                    "object": "chat.completion.chunk",
-                                    "created": int(time.time()),
-                                    "model": model,
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {
-                                            "content": text
-                                        },
-                                        "finish_reason": None
-                                    }]
+                                    "object": "message",
+                                    "id": str(uuid.uuid4()),
+                                    "model": "openai/gpt-4o",
+                                    "role": "assistant",
+                                    "content": text,
+                                    "created_at": int(time.time())
                                 }
                                 
-                                yield f"data: {json.dumps(response)}\n\n"
-                        except json.JSONDecodeError:
-                            logger.error("Failed to parse Flowise response")
+                                chunk = f"data: {json.dumps(response)}\n\n"
+                                logger.info(f"Sending chunk: {chunk}")
+                                yield chunk
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse Flowise response: {e}")
                             continue
-            
-    except requests.RequestException as e:
-        logger.error(f"Error communicating with Flowise: {e}")
-        yield f'data: {{"error": "Error communicating with Flowise: {e}"}}\n\n'
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        yield f'data: {{"error": "Unexpected error: {e}"}}\n\n'
+                    
+        except Exception as e:
+            logger.error(f"Error in fetch_flowise_stream: {e}")
+            yield f'data: {{"error": "{str(e)}"}}\n\n'
+            yield "data: [DONE]\n\n"
 
 
-async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, None]:
+async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
     try:
-        messages = body.get("messages", [])
-        if not messages:
-            raise ValueError("No messages provided in the request.")
+        # Get content from the request
+        content = None
+        if "messages" in body:
+            messages = body["messages"]
+            if messages:
+                content = messages[-1].get("content")
+        else:
+            content = body.get("content")
 
-        # Get model preferences and strip provider prefix if present
-        primary_model = body.get("model", "").split("/")[-1]  # Strip provider prefix
-        fallback_models = [m.split("/")[-1] for m in body.get("models", [])]
+        if not content:
+            raise ValueError("No content provided in request")
+
+        # Format request for Flowise
+        flowise_request_data = {
+            "question": content,
+            "overrideConfig": {
+                "systemMessage": "You are an AI assistant powered by Thrive Digital Era."
+            }
+        }
+
+        FLOWISE_PREDICTION_URL = (
+            f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
+        )
+
+        logger.info(f"Sending request to Flowise: {flowise_request_data}")
         
-        # If no models specified, use defaults
-        if not primary_model and not fallback_models:
-            primary_model = "gpt-4o"
-            fallback_models = ["gpt-4", "gpt-3.5-turbo"]
-        elif primary_model and not fallback_models:
-            fallback_models = [primary_model]  # Use primary as fallback
-        
-        # Try models in sequence until one works
-        last_error = None
-        for model in [primary_model] + fallback_models:
-            try:
-                # Format request for Flowise
-                flowise_request_data = {
-                    "question": messages[-1]["content"],
-                    "overrideConfig": {
-                        "returnSourceDocuments": True,
-                        "model": model,  # Pass stripped model name
-                        "systemMessage": "You are an AI assistant powered by Thrive Digital Era."
-                    }
-                }
+        async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
+            yield chunk
 
-                FLOWISE_PREDICTION_URL = (
-                    f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
-                )
-
-                # Try to get response from this model
-                async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
-                    if '"error":' in chunk:  # Simple error check
-                        raise Exception(chunk)
-                    yield chunk
-                return  # Success! Exit the loop
-                
-            except Exception as e:
-                last_error = e
-                logger.warning(f"Model {model} failed: {e}. Trying next model...")
-                continue
-        
-        # If we get here, all models failed
-        if last_error:
-            logger.error(f"All models failed. Last error: {last_error}")
-            yield f'data: {{"error": "All models failed. Last error: {str(last_error)}"}}\n\n'
-
-    except ValueError as e:
-        logger.error(f"Validation error: {e}")
-        yield f'data: {{"error": "{e}"}}\n\n'
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        yield f'data: {{"error": "Unexpected error: {e}"}}\n\n'
+        logger.error(f"Error in handle_chat_completion: {e}")
+        yield f'data: {{"error": "{str(e)}"}}\n\n'
+        yield "data: [DONE]\n\n"
 
 
 def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
@@ -168,7 +148,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             return {
                 "object": "message",
                 "id": str(uuid.uuid4()),
-                "model": body.get("model", "gpt-4o"),
+                "model": body.get("model", "openai/gpt-4o"),
                 "role": "assistant",
                 "content": flowise_response.get("text", ""),
                 "created_at": int(time.time())
