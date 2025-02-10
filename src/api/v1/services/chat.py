@@ -37,12 +37,12 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
                         text = data.get("text", "")
                         
                         if text:
-                            # Use OpenAI format
+                            # Use OpenAI format with client's model name
                             response = {
                                 "id": f"chatcmpl-{str(uuid.uuid4())}",
                                 "object": "chat.completion.chunk",
                                 "created": int(time.time()),
-                                "model": "openai/gpt-4o",
+                                "model": "thrive/gpt-4o",
                                 "choices": [{
                                     "index": 0,
                                     "delta": {
@@ -147,7 +147,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             "id": f"chatcmpl-{str(uuid.uuid4())}",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": "openai/gpt-4o",
+            "model": "thrive/gpt-4o",
             "choices": [{
                 "index": 0,
                 "message": {
