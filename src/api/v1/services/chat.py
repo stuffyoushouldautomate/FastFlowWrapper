@@ -25,17 +25,16 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                         break
                     if decoded_line.startswith("data:"):
                         try:
-                            # Parse the Flowise response
                             data = json.loads(decoded_line.replace("data: ", "").strip())
                             text = data.get("text", "")
                             
-                            if text:  # Only yield if there's actual content
-                                # Return in OpenAI format
+                            if text:
+                                model = f"openai/{payload['overrideConfig']['model']}"  # Add provider prefix
                                 response = {
                                     "id": f"chatcmpl-{str(uuid.uuid4())}",
                                     "object": "chat.completion.chunk",
                                     "created": int(time.time()),
-                                    "model": "gpt-3.5-turbo",
+                                    "model": model,
                                     "choices": [{
                                         "index": 0,
                                         "delta": {
@@ -64,23 +63,51 @@ async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, N
         if not messages:
             raise ValueError("No messages provided in the request.")
 
-        # Get the latest message content
-        latest_message = messages[-1]["content"]
+        # Get model preferences and strip provider prefix if present
+        primary_model = body.get("model", "").split("/")[-1]  # Strip provider prefix
+        fallback_models = [m.split("/")[-1] for m in body.get("models", [])]
+        
+        # If no models specified, use defaults
+        if not primary_model and not fallback_models:
+            primary_model = "gpt-4o"
+            fallback_models = ["gpt-4", "gpt-3.5-turbo"]
+        elif primary_model and not fallback_models:
+            fallback_models = [primary_model]  # Use primary as fallback
+        
+        # Try models in sequence until one works
+        last_error = None
+        for model in [primary_model] + fallback_models:
+            try:
+                # Format request for Flowise
+                flowise_request_data = {
+                    "question": messages[-1]["content"],
+                    "overrideConfig": {
+                        "returnSourceDocuments": True,
+                        "model": model,  # Pass stripped model name
+                        "systemMessage": "You are an AI assistant powered by Thrive Digital Era."
+                    }
+                }
 
-        # Simple request format for Flowise
-        flowise_request_data = {
-            "question": latest_message,
-            "overrideConfig": {
-                "returnSourceDocuments": True
-            }
-        }
+                FLOWISE_PREDICTION_URL = (
+                    f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
+                )
 
-        FLOWISE_PREDICTION_URL = (
-            f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
-        )
-
-        for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
-            yield chunk
+                # Try to get response from this model
+                async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
+                    if '"error":' in chunk:  # Simple error check
+                        raise Exception(chunk)
+                    yield chunk
+                return  # Success! Exit the loop
+                
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Model {model} failed: {e}. Trying next model...")
+                continue
+        
+        # If we get here, all models failed
+        if last_error:
+            logger.error(f"All models failed. Last error: {last_error}")
+            yield f'data: {{"error": "All models failed. Last error: {str(last_error)}"}}\n\n'
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
@@ -109,16 +136,23 @@ def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
 
 async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        # Handle both standard OpenAI format and Thrive format
+        # Get content from either format
         content = body.get("content") if "content" in body else None
         if content is None:
-            # Try OpenAI format
             messages = body.get("messages", [])
             if not messages:
                 raise ValueError("No messages provided in the request.")
             content = messages[-1].get("content", "")
         
-        flowise_request_data = {"question": content}
+        # Get model and strip provider prefix
+        model = body.get("model", "gpt-4o").split("/")[-1]
+        
+        flowise_request_data = {
+            "question": content,
+            "overrideConfig": {
+                "model": model
+            }
+        }
 
         FLOWISE_PREDICTION_URL = (
             f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
@@ -134,7 +168,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             return {
                 "object": "message",
                 "id": str(uuid.uuid4()),
-                "model": body.get("model", "thrive/gpt-4o"),
+                "model": body.get("model", "gpt-4o"),
                 "role": "assistant",
                 "content": flowise_response.get("text", ""),
                 "created_at": int(time.time())
