@@ -10,6 +10,11 @@ from src.models.openai import ChatCompletionRequest
 router = APIRouter()
 
 
+@router.get("/", tags=["Health"])
+async def health_check():
+    return {"status": "ok"}
+
+
 @router.get("/v1/models", response_model=None, tags=["Models"])
 async def get_models():
     return await get_openai_models()
