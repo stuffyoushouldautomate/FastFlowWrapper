@@ -37,19 +37,36 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
                         text = data.get("text", "")
                         
                         if text:
+                            # Match Thrive's exact response format
                             response = {
                                 "object": "message",
                                 "id": str(uuid.uuid4()),
-                                "model": "openai/gpt-4o",
+                                "model": "thrive/gpt-4o",  # Keep thrive prefix for responses
                                 "role": "assistant",
                                 "content": text,
-                                "created_at": int(time.time())
+                                "quote": None,
+                                "cost": 0,
+                                "created_at": int(time.time()),
+                                "assistant": {
+                                    "object": "assistant",
+                                    "id": "0194e030-15fe-7156-b877-f311e4a5c32b",
+                                    "name": "ThriveAI",
+                                    "expertise": "Thrive Digital Era",
+                                    "description": None,
+                                    "avatar": "https://thrive.venu.pro/uploads/1ec452e9-a0d5-4963-9e6c-f1f77e4024e0.jpg",
+                                    "created_at": 1738928035,
+                                    "updated_at": 1739159550
+                                },
+                                "parent_id": None,
+                                "user": None,
+                                "image": None,
+                                "file": None,
+                                "items": []
                             }
                             
                             chunk = f"data: {json.dumps(response)}\n\n"
                             logger.info(f"Sending chunk: {chunk}")
                             yield chunk
-                            # Add a small delay to prevent flooding
                             await asyncio.sleep(0.1)
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to parse Flowise response: {e}")
