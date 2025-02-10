@@ -31,7 +31,8 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                             data = json.loads(decoded_line.replace("data: ", "").strip())
                             text = data.get("text", "")
                             
-                            if text:  # Only yield if there's actual content
+                            # Skip system messages about knowledge base
+                            if text and not text.startswith("Knowledge base is available"):
                                 if payload.get("object") == "message":  # Thrive format
                                     response = {
                                         "object": "message",
