@@ -35,23 +35,40 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
 
 async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, None]:
     try:
-        messages = body.get("messages", [])
-        if not messages:
-            raise ValueError("No messages provided in the request.")
+        # Handle both standard OpenAI format and Thrive format
+        content = body.get("content") if "content" in body else None
+        if content is None:
+            # Try OpenAI format
+            messages = body.get("messages", [])
+            if not messages:
+                raise ValueError("No messages provided in the request.")
+            content = messages[-1].get("content", "")
 
-        latest_message = messages[-1]
-        if latest_message.get("role", "").lower() != "user":
-            raise ValueError("The latest message must be from the user.")
-
-        flowise_request_data = {"question": latest_message.get("content", "")}
+        flowise_request_data = {"question": content}
 
         FLOWISE_PREDICTION_URL = (
             f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
         )
 
-        generator = fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data)
-        for chunk in generator:
-            yield chunk
+        # Check if the request is from Thrive (has object="message")
+        if body.get("object") == "message":
+            # Stream in Thrive format
+            for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
+                if chunk.startswith('data: '):
+                    data = json.loads(chunk.replace('data: ', ''))
+                    response = {
+                        "object": "message",
+                        "id": str(uuid.uuid4()),
+                        "model": body.get("model", "thrive/gpt-4o"),
+                        "role": "assistant",
+                        "content": data.get("text", ""),
+                        "created_at": int(time.time())
+                    }
+                    yield f"data: {json.dumps(response)}\n\n"
+        else:
+            # Stream in OpenAI format
+            for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
+                yield chunk
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
