@@ -99,26 +99,38 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             FLOWISE_PREDICTION_URL, flowise_request_data
         )
 
-        # Transform Flowise response to OpenAI format
-        return {
-            "id": f"chatcmpl-{str(uuid.uuid4())}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": body.get("model", "thrive/gpt-4o"),  # Make sure default matches
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": flowise_response.get("text", "")
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0
+        # Check if the request is from Thrive (has object="message")
+        if body.get("object") == "message":
+            # Return Thrive format
+            return {
+                "object": "message",
+                "id": str(uuid.uuid4()),
+                "model": body.get("model", "thrive/gpt-4o"),
+                "role": "assistant",
+                "content": flowise_response.get("text", ""),
+                "created_at": int(time.time())
             }
-        }
+        else:
+            # Return OpenAI format
+            return {
+                "id": f"chatcmpl-{str(uuid.uuid4())}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": body.get("model", "thrive/gpt-4o"),
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": flowise_response.get("text", "")
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                }
+            }
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
