@@ -7,7 +7,6 @@ from fastapi import HTTPException
 import time
 import uuid
 import asyncio
-import aiohttp
 
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
@@ -15,68 +14,66 @@ settings = Settings()
 
 async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerator[str, None]:
     try:
-        # First yield an empty data event to establish the connection
-        yield "data: {}\n\n"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(flowise_url, json=payload) as response:
-                response.raise_for_status()
-                logger.info("Connected to Flowise stream")
-                
-                # Track the full message
-                full_message = ""
-                
-                async for line in response.content:
-                    if not line:
-                        continue
-                        
-                    decoded_line = line.decode("utf-8")
-                    logger.info(f"Received line from Flowise: {decoded_line}")
+        with requests.post(
+            flowise_url, json=payload, stream=True, timeout=30
+        ) as response:
+            response.raise_for_status()
+            logger.info("Connected to Flowise stream")
+            
+            # Track the full message
+            full_message = ""
+            
+            for line in response.iter_lines():
+                if not line:
+                    continue
                     
-                    try:
-                        # Parse the event and data
-                        if decoded_line.startswith("event:"):
-                            event_type = decoded_line.replace("event:", "").strip()
-                            continue
-                        
-                        if decoded_line.startswith("data:"):
-                            data = json.loads(decoded_line.replace("data:", "").strip())
-                            
-                            # Handle different Flowise events
-                            if event_type == "token":
-                                token = data
-                                if token:
-                                    full_message += token
-                                    response = {
-                                        "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                        "object": "chat.completion.chunk",
-                                        "created": int(time.time()),
-                                        "model": "thrive/gpt-4o",
-                                        "choices": [{
-                                            "index": 0,
-                                            "delta": {
-                                                "content": token
-                                            },
-                                            "finish_reason": None
-                                        }]
-                                    }
-                                    yield f"data: {json.dumps(response)}\n\n"
-                        
-                            elif event_type == "end":
-                                # Send final message
-                                yield "data: [DONE]\n\n"
-                                break
-                        
-                            elif event_type == "error":
-                                error_msg = data.get("error", "Unknown error")
-                                logger.error(f"Flowise error: {error_msg}")
-                                yield f'data: {{"error": "{error_msg}"}}\n\n'
-                                yield "data: [DONE]\n\n"
-                                break
-                                
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse Flowise response: {e}")
+                decoded_line = line.decode("utf-8")
+                logger.info(f"Received line from Flowise: {decoded_line}")
+                
+                try:
+                    # Parse the event and data
+                    if decoded_line.startswith("event:"):
+                        event_type = decoded_line.replace("event:", "").strip()
                         continue
+                    
+                    if decoded_line.startswith("data:"):
+                        data = json.loads(decoded_line.replace("data:", "").strip())
+                        
+                        # Handle different Flowise events
+                        if event_type == "token":
+                            token = data
+                            if token:
+                                full_message += token
+                                response = {
+                                    "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": "thrive/gpt-4o",
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {
+                                            "content": token
+                                        },
+                                        "finish_reason": None
+                                    }]
+                                }
+                                yield f"data: {json.dumps(response)}\n\n"
+                        
+                        elif event_type == "end":
+                            # Send final message
+                            yield "data: [DONE]\n\n"
+                            break
+                        
+                        elif event_type == "error":
+                            error_msg = data.get("error", "Unknown error")
+                            logger.error(f"Flowise error: {error_msg}")
+                            yield f'data: {{"error": "{error_msg}"}}\n\n'
+                            yield "data: [DONE]\n\n"
+                            break
+                            
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse Flowise response: {e}")
+                    continue
                     
     except Exception as e:
         logger.error(f"Error in fetch_flowise_stream: {e}")
