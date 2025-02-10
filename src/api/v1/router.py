@@ -17,21 +17,19 @@ async def get_models():
 
 @router.post("/v1/chat/completions", tags=["Completions"])
 async def create_chat_completion(request: Request):
-    # Get raw request body
     body = await request.json()
-    
-    # Check if it's a streaming request
     stream = body.get("stream", False)
     
     if stream:
         return StreamingResponse(
-            handle_chat_completion(body), 
+            handle_chat_completion(body),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "Content-Type": "text/event-stream",
-                "Access-Control-Allow-Origin": "*"
+                "Access-Control-Allow-Origin": "*",
+                "X-Accel-Buffering": "no"  # Disable nginx buffering
             }
         )
     else:

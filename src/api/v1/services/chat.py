@@ -1,4 +1,4 @@
-from typing import Generator, Dict, Any
+from typing import Generator, Dict, Any, AsyncGenerator
 import requests
 import json
 from src.config.config import Settings
@@ -6,12 +6,13 @@ import logging
 from fastapi import HTTPException
 import time
 import uuid
+import asyncio
 
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
 
 
-def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None, None]:
+async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerator[str, None]:
     try:
         with requests.post(
             flowise_url, json=payload, stream=True, timeout=30
@@ -48,6 +49,8 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                             chunk = f"data: {json.dumps(response)}\n\n"
                             logger.info(f"Sending chunk: {chunk}")
                             yield chunk
+                            # Add a small delay to prevent flooding
+                            await asyncio.sleep(0.1)
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to parse Flowise response: {e}")
                         continue
@@ -58,7 +61,7 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
         yield "data: [DONE]\n\n"
 
 
-async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, None]:
+async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
     try:
         # Get content from the request
         content = None
