@@ -1,19 +1,21 @@
 # Use the official Python image from the Docker Hub
-FROM python:3.11-slim
+FROM python:3.9-slim
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Copy dependency files first
-COPY pyproject.toml poetry.lock* ./
-COPY README.md ./
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Poetry and dependencies
-RUN pip install poetry
-RUN poetry config virtualenvs.create false && poetry install --no-root
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code
+# Copy application code
 COPY . .
 
-# Use Railway's PORT environment variable
-CMD ["sh", "-c", "poetry run uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8080} --reload"]
+# Command to run the application
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
