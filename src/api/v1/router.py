@@ -26,7 +26,13 @@ async def create_chat_completion(request: Request):
     if stream:
         return StreamingResponse(
             handle_chat_completion(body), 
-            media_type="text/event-stream"
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream",
+                "Access-Control-Allow-Origin": "*"
+            }
         )
     else:
         response = await handle_chat_completion_sync(body)

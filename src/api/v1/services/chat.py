@@ -1,4 +1,4 @@
-from typing import Generator, Dict, Any, AsyncGenerator
+from typing import Generator, Dict, Any
 import requests
 import json
 from src.config.config import Settings
@@ -6,61 +6,59 @@ import logging
 from fastapi import HTTPException
 import time
 import uuid
-import asyncio
-from aiohttp import ClientSession, ClientTimeout
 
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
 
 
-async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerator[str, None]:
-    timeout = ClientTimeout(total=30)
-    async with ClientSession(timeout=timeout) as session:
-        try:
-            async with session.post(flowise_url, json=payload) as response:
-                response.raise_for_status()
-                logger.info("Connected to Flowise stream")
+def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None, None]:
+    try:
+        with requests.post(
+            flowise_url, json=payload, stream=True, timeout=30
+        ) as response:
+            response.raise_for_status()
+            logger.info("Connected to Flowise stream")
+            
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                    
+                decoded_line = line.decode("utf-8")
+                logger.info(f"Received line: {decoded_line}")
                 
-                async for line in response.content:
-                    if not line:
-                        continue
-                        
-                    decoded_line = line.decode("utf-8")
-                    logger.info(f"Received line: {decoded_line}")
+                if decoded_line.strip() == "[DONE]":
+                    yield "data: [DONE]\n\n"
+                    break
                     
-                    if decoded_line.strip() == "[DONE]":
-                        yield "data: [DONE]\n\n"
-                        break
+                if decoded_line.startswith("data:"):
+                    try:
+                        data = json.loads(decoded_line.replace("data: ", "").strip())
+                        text = data.get("text", "")
                         
-                    if decoded_line.startswith("data:"):
-                        try:
-                            data = json.loads(decoded_line.replace("data: ", "").strip())
-                            text = data.get("text", "")
+                        if text:
+                            response = {
+                                "object": "message",
+                                "id": str(uuid.uuid4()),
+                                "model": "openai/gpt-4o",
+                                "role": "assistant",
+                                "content": text,
+                                "created_at": int(time.time())
+                            }
                             
-                            if text:
-                                response = {
-                                    "object": "message",
-                                    "id": str(uuid.uuid4()),
-                                    "model": "openai/gpt-4o",
-                                    "role": "assistant",
-                                    "content": text,
-                                    "created_at": int(time.time())
-                                }
-                                
-                                chunk = f"data: {json.dumps(response)}\n\n"
-                                logger.info(f"Sending chunk: {chunk}")
-                                yield chunk
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse Flowise response: {e}")
-                            continue
+                            chunk = f"data: {json.dumps(response)}\n\n"
+                            logger.info(f"Sending chunk: {chunk}")
+                            yield chunk
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse Flowise response: {e}")
+                        continue
                     
-        except Exception as e:
-            logger.error(f"Error in fetch_flowise_stream: {e}")
-            yield f'data: {{"error": "{str(e)}"}}\n\n'
-            yield "data: [DONE]\n\n"
+    except Exception as e:
+        logger.error(f"Error in fetch_flowise_stream: {e}")
+        yield f'data: {{"error": "{str(e)}"}}\n\n'
+        yield "data: [DONE]\n\n"
 
 
-async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
+async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, None]:
     try:
         # Get content from the request
         content = None
