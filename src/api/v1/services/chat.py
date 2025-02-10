@@ -13,8 +13,19 @@ settings = Settings()
 
 def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None, None]:
     try:
-        # Extract format info but send only question to Flowise
-        flowise_data = {"question": payload["question"]}
+        # Format request for Flowise
+        flowise_data = {
+            "question": payload["question"],
+            "history": [
+                {
+                    "role": "assistant",
+                    "message": "I am ready to help you. What would you like to know?"
+                }
+            ],
+            "overrideConfig": {
+                "systemMessage": "You are a helpful AI assistant."
+            }
+        }
         
         with requests.post(
             flowise_url, json=flowise_data, stream=True, timeout=30
@@ -31,8 +42,7 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                             data = json.loads(decoded_line.replace("data: ", "").strip())
                             text = data.get("text", "")
                             
-                            # Skip system messages about knowledge base
-                            if text and not text.startswith("Knowledge base is available"):
+                            if text:  # Only yield if there's actual content
                                 if payload.get("object") == "message":  # Thrive format
                                     response = {
                                         "object": "message",
@@ -83,8 +93,19 @@ async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, N
                 raise ValueError("No messages provided in the request.")
             content = messages[-1].get("content", "")
 
-        # Create Flowise request with just the question
-        flowise_request_data = {"question": content}
+        # Format request for Flowise with chat history
+        flowise_request_data = {
+            "question": content,
+            "history": [
+                {
+                    "role": "assistant",
+                    "message": "I am ready to help you. What would you like to know?"
+                }
+            ],
+            "overrideConfig": {
+                "systemMessage": "You are a helpful AI assistant."
+            }
+        }
 
         FLOWISE_PREDICTION_URL = (
             f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
