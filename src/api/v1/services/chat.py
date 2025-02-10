@@ -85,24 +85,25 @@ def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
 
 async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        # Extract content and ensure it matches OpenAI format
-        messages = []
-        if "messages" in body:
-            messages = body.get("messages", [])
-        elif "content" in body:
-            messages = [{
-                "role": "user",
-                "content": body.get("content", "")
-            }]
-        
-        if not messages:
-            raise ValueError("No content or messages provided")
+        # Log the raw incoming request
+        logger.info(f"Raw incoming request: {json.dumps(body, indent=2)}")
 
-        # Get the last user message
-        content = messages[-1].get("content", "")
+        # Handle both direct content and messages format
+        content = None
+        if "content" in body:
+            content = body.get("content")
+            role = body.get("role", "user")
+            messages = [{
+                "role": role,
+                "content": content
+            }]
+        elif "messages" in body:
+            messages = body.get("messages", [])
+            if messages:
+                content = messages[-1].get("content")
         
-        # Log the incoming request for debugging
-        logger.info(f"Incoming request body: {json.dumps(body, indent=2)}")
+        if not content:
+            raise ValueError("No content provided in request")
 
         # Prepare request for Flowise
         flowise_request_data = {
@@ -111,13 +112,11 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
                 "systemMessage": "You are ThriveAI, a helpful AI assistant.",
                 "modelName": "d81291ea-79b8-40fa-8752-80403ed5cf09",
                 "temperature": body.get("temperature", 0.7),
-                "maxTokens": body.get("max_tokens", 1000),
-                "messages": messages  # Pass full message history
+                "maxTokens": body.get("max_tokens", 1000)
             }
         }
 
-        # Log the Flowise request for debugging
-        logger.info(f"Flowise request data: {json.dumps(flowise_request_data, indent=2)}")
+        logger.info(f"Flowise request: {json.dumps(flowise_request_data, indent=2)}")
 
         FLOWISE_PREDICTION_URL = (
             f"{settings.flowise_api_base_url}/api/v1/prediction/{settings.flowise_chatflow_id}"
@@ -132,7 +131,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             "id": f"chatcmpl-{str(uuid.uuid4())}",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": body.get("model", "gpt-3.5-turbo"),
+            "model": body.get("model", "gpt-4o"),
             "choices": [{
                 "index": 0,
                 "message": {
@@ -142,13 +141,12 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
                 "finish_reason": "stop"
             }],
             "usage": {
-                "prompt_tokens": len(str(messages)),  # Rough estimation
-                "completion_tokens": len(flowise_response.get("text", "")),  # Rough estimation
-                "total_tokens": len(str(messages)) + len(flowise_response.get("text", ""))
+                "prompt_tokens": len(content) if content else 0,
+                "completion_tokens": len(flowise_response.get("text", "")),
+                "total_tokens": (len(content) if content else 0) + len(flowise_response.get("text", ""))
             }
         }
 
-        # Log the final response for debugging
         logger.info(f"Final response: {json.dumps(response, indent=2)}")
         
         return response
@@ -157,5 +155,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"Validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        logger.error(f"Error args: {e.args}")
         raise HTTPException(status_code=500, detail=f"Unexpected error occurred: {str(e)}")
