@@ -13,7 +13,6 @@ settings = Settings()
 
 def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None, None]:
     try:
-        # Send the full payload to Flowise including history
         with requests.post(
             flowise_url, json=payload, stream=True, timeout=30
         ) as response:
@@ -30,30 +29,21 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                             text = data.get("text", "")
                             
                             if text:  # Only yield if there's actual content
-                                if "object" in payload and payload["object"] == "message":  # Thrive format
-                                    response = {
-                                        "object": "message",
-                                        "id": str(uuid.uuid4()),
-                                        "model": payload.get("model", "thrive/gpt-4o"),
-                                        "role": "assistant",
-                                        "content": text,
-                                        "created_at": int(time.time())
-                                    }
-                                else:  # OpenAI format
-                                    response = {
-                                        "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                        "object": "chat.completion.chunk",
-                                        "created": int(time.time()),
-                                        "model": payload.get("model", "thrive/gpt-4o"),
-                                        "choices": [{
-                                            "index": 0,
-                                            "delta": {
-                                                "role": "assistant",
-                                                "content": text
-                                            },
-                                            "finish_reason": None
-                                        }]
-                                    }
+                                # Always return in OpenAI format
+                                response = {
+                                    "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": "gpt-3.5-turbo",  # Use a standard model name
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {
+                                            "role": "assistant",
+                                            "content": text
+                                        },
+                                        "finish_reason": None
+                                    }]
+                                }
                                 
                                 yield f"data: {json.dumps(response)}\n\n"
                         except json.JSONDecodeError:
@@ -71,48 +61,25 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
 
 async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, None]:
     try:
-        # Handle both standard OpenAI format and Thrive format
-        content = body.get("content") if "content" in body else None
-        if content is None:
-            # Try OpenAI format
-            messages = body.get("messages", [])
-            if not messages:
-                raise ValueError("No messages provided in the request.")
-            content = messages[-1].get("content", "")
+        messages = body.get("messages", [])
+        if not messages:
+            raise ValueError("No messages provided in the request.")
 
-        # Extract conversation history from Thrive format
-        conversation = body.get("conversation", {})
-        history = []
-        
-        if conversation:
-            # Get previous messages from conversation
-            prev_messages = conversation.get("messages", [])
-            for msg in prev_messages:
-                history.append({
-                    "role": msg.get("role", "user"),
-                    "message": msg.get("content", "")
-                })
-
-        # Format request for Flowise with chat history
+        # Format for Flowise - just pass the latest message and history
         flowise_request_data = {
-            "question": content,
-            "history": history,
-            "overrideConfig": {
-                "systemMessage": "You are ThriveAI, an expert in digital transformation and organizational development."
-            }
+            "question": messages[-1]["content"],
+            "history": [
+                {
+                    "role": msg["role"],
+                    "message": msg["content"]
+                }
+                for msg in messages[:-1]  # Previous messages as history
+            ]
         }
 
         FLOWISE_PREDICTION_URL = (
             f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
         )
-
-        # Pass through the format info but use Flowise request data
-        request_format = {
-            "question": content,
-            "object": body.get("object"),
-            "model": body.get("model", "thrive/gpt-4o"),
-            "conversation": conversation
-        }
 
         for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
             yield chunk
