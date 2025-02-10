@@ -21,6 +21,7 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                 if line:
                     decoded_line = line.decode("utf-8")
                     if decoded_line.strip() == "[DONE]":
+                        yield "data: [DONE]\n\n"
                         break
                     if decoded_line.startswith("data:"):
                         try:
@@ -29,16 +30,15 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                             text = data.get("text", "")
                             
                             if text:  # Only yield if there's actual content
-                                # Always return in OpenAI format
+                                # Return in OpenAI format
                                 response = {
                                     "id": f"chatcmpl-{str(uuid.uuid4())}",
                                     "object": "chat.completion.chunk",
                                     "created": int(time.time()),
-                                    "model": "gpt-3.5-turbo",  # Use a standard model name
+                                    "model": "gpt-3.5-turbo",
                                     "choices": [{
                                         "index": 0,
                                         "delta": {
-                                            "role": "assistant",
                                             "content": text
                                         },
                                         "finish_reason": None
@@ -47,10 +47,9 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                                 
                                 yield f"data: {json.dumps(response)}\n\n"
                         except json.JSONDecodeError:
+                            logger.error("Failed to parse Flowise response")
                             continue
             
-            # Send final [DONE] message
-            yield "data: [DONE]\n\n"
     except requests.RequestException as e:
         logger.error(f"Error communicating with Flowise: {e}")
         yield f'data: {{"error": "Error communicating with Flowise: {e}"}}\n\n'
@@ -65,16 +64,15 @@ async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, N
         if not messages:
             raise ValueError("No messages provided in the request.")
 
-        # Format for Flowise - just pass the latest message and history
+        # Get the latest message content
+        latest_message = messages[-1]["content"]
+
+        # Simple request format for Flowise
         flowise_request_data = {
-            "question": messages[-1]["content"],
-            "history": [
-                {
-                    "role": msg["role"],
-                    "message": msg["content"]
-                }
-                for msg in messages[:-1]  # Previous messages as history
-            ]
+            "question": latest_message,
+            "overrideConfig": {
+                "returnSourceDocuments": True
+            }
         }
 
         FLOWISE_PREDICTION_URL = (
@@ -147,7 +145,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
                 "id": f"chatcmpl-{str(uuid.uuid4())}",
                 "object": "chat.completion",
                 "created": int(time.time()),
-                "model": body.get("model", "thrive/gpt-4o"),
+                "model": body.get("model", "openai/gpt-4o"),
                 "choices": [{
                     "index": 0,
                     "message": {
