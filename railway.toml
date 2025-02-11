@@ -3,7 +3,8 @@ builder = "nixpacks"
 buildCommand = "pip install -r requirements.txt"
 
 [deploy]
-startCommand = "uvicorn src.main:app --host 0.0.0.0 --port $PORT"
+startCommand = "python -c \"import os; port = int(os.getenv('PORT', '8000')); os.system(f'uvicorn src.main:app --host 0.0.0.0 --port {port}')\""
 healthcheckPath = "/v1/models"
-healthcheckTimeout = 100
-restartPolicyType = "on_failure" 
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+healthcheckInterval = 30 
