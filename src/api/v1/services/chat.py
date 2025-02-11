@@ -23,20 +23,33 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format:
         response.raise_for_status()
         logger.info("Connected to Flowise stream")
 
-        # Process the stream
-        for line in response.iter_lines():
-            if line:
-                decoded_line = line.decode("utf-8")
-                logger.info(f"Received line: {decoded_line}")
+        # Process the stream line by line
+        buffer = ""
+        async for line in response.iter_lines():
+            if not line:
+                continue
                 
-                if decoded_line.startswith("data: "):
-                    try:
-                        # Parse Flowise event format
-                        data = json.loads(decoded_line.replace("data: ", "").strip())
+            buffer += line.decode("utf-8") + "\n"
+            
+            # Check if we have a complete message
+            if buffer.endswith("\n\n"):
+                messages = buffer.strip().split("\n")
+                buffer = ""
+                
+                for message in messages:
+                    if not message.startswith("data: "):
+                        continue
                         
-                        # Handle different Flowise event types
-                        if data.get("event") == "token" and data.get("data"):
-                            text = data["data"]
+                    data = message.replace("data: ", "").strip()
+                    if not data:
+                        continue
+                        
+                    try:
+                        parsed = json.loads(data)
+                        logger.info(f"Parsed data: {parsed}")
+                        
+                        if parsed.get("event") == "token" and parsed.get("data"):
+                            text = parsed["data"]
                             
                             if text:
                                 if response_format == "message":
@@ -45,7 +58,7 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format:
                                         "object": "message",
                                         "id": str(uuid.uuid4()),
                                         "model": f"thrive/{payload['overrideConfig']['model']}",
-                                        "role": "assistant",
+                                        "role": "assistant", 
                                         "content": text,
                                         "created_at": int(time.time())
                                     }
@@ -68,8 +81,8 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format:
                                 chunk = f"data: {json.dumps(response)}\n\n"
                                 logger.info(f"Sending chunk: {chunk}")
                                 yield chunk
-                        
-                        elif data.get("event") == "done":
+                                
+                        elif parsed.get("event") == "done":
                             logger.info("Received done event")
                             yield "data: [DONE]\n\n"
                             break
