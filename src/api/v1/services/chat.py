@@ -19,15 +19,16 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format:
             async with client.stream("POST", flowise_url, json=payload, timeout=30) as response:
                 response.raise_for_status()
                 logger.info("Connected to Flowise stream")
+                logger.info(f"Response headers: {response.headers}")  # Log headers
                 
                 buffer = ""
                 async for line in response.aiter_lines():
+                    logger.info(f"Raw line: {line}")  # Log raw lines
                     if not line:
                         continue
                         
                     buffer += line + "\n"
                     
-                    # Process complete SSE messages
                     if buffer.endswith("\n\n"):
                         messages = buffer.strip().split("\n")
                         buffer = ""
@@ -44,40 +45,42 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format:
                                 parsed = json.loads(data)
                                 logger.info(f"Parsed data: {parsed}")
                                 
+                                # Handle both text and token events
+                                text = None
                                 if parsed.get("event") == "token" and parsed.get("data"):
                                     text = parsed["data"]
+                                elif parsed.get("text"):  # Direct text response
+                                    text = parsed["text"]
                                     
-                                    if text:
-                                        if response_format == "message":
-                                            # Thrive format
-                                            response = {
-                                                "object": "message",
-                                                "id": str(uuid.uuid4()),
-                                                "model": f"thrive/{payload['overrideConfig']['model']}",
-                                                "role": "assistant",
-                                                "content": text,
-                                                "created_at": int(time.time())
-                                            }
-                                        else:
-                                            # OpenAI format
-                                            response = {
-                                                "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                                "object": "chat.completion.chunk",
-                                                "created": int(time.time()),
-                                                "model": f"openai/{payload['overrideConfig']['model']}",
-                                                "choices": [{
-                                                    "index": 0,
-                                                    "delta": {
-                                                        "content": text
-                                                    },
-                                                    "finish_reason": None
-                                                }]
-                                            }
-                                        
-                                        chunk = f"data: {json.dumps(response)}\n\n"
-                                        logger.info(f"Sending chunk: {chunk}")
-                                        yield chunk
-                                        
+                                if text:
+                                    if response_format == "message":
+                                        response = {
+                                            "object": "message",
+                                            "id": str(uuid.uuid4()),
+                                            "model": f"thrive/{payload['overrideConfig']['model']}",
+                                            "role": "assistant",
+                                            "content": text,
+                                            "created_at": int(time.time())
+                                        }
+                                    else:
+                                        response = {
+                                            "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                            "object": "chat.completion.chunk",
+                                            "created": int(time.time()),
+                                            "model": f"openai/{payload['overrideConfig']['model']}",
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {
+                                                    "content": text
+                                                },
+                                                "finish_reason": None
+                                            }]
+                                        }
+                                    
+                                    chunk = f"data: {json.dumps(response)}\n\n"
+                                    logger.info(f"Sending chunk: {chunk}")
+                                    yield chunk
+                                    
                                 elif parsed.get("event") == "done":
                                     logger.info("Received done event")
                                     yield "data: [DONE]\n\n"
@@ -125,26 +128,28 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, No
             try:
                 # Format request for Flowise
                 flowise_request_data = {
-                    "chatflowId": settings.flowise_chatflow_id,
                     "question": messages[-1]["content"],
                     "overrideConfig": {
-                        "model": model,  # Pass stripped model name
+                        "model": model,
                         "systemMessage": "You are an AI assistant powered by Thrive Digital Era.",
-                        "sessionId": str(uuid.uuid4())  # Add session ID
+                        "sessionId": str(uuid.uuid4())
                     },
-                    "streaming": True  # Enable streaming
+                    "stream": True  # Change streaming to stream
                 }
 
                 FLOWISE_PREDICTION_URL = (
                     f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
                 )
 
+                logger.info(f"Sending request to Flowise: {flowise_request_data}")
+                
                 # Try to get response from this model
                 async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data, body.get("object")):
-                    if '"error":' in chunk:  # Simple error check
+                    logger.info(f"Received chunk: {chunk}")  # Add more logging
+                    if '"error":' in chunk:
                         raise Exception(chunk)
                     yield chunk
-                return  # Success! Exit the loop
+                return
                 
             except Exception as e:
                 last_error = e
