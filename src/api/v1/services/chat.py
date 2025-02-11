@@ -1,6 +1,7 @@
 from typing import Generator, Dict, Any, AsyncGenerator
 import requests
 import json
+import openai
 from src.config.config import Settings
 import logging
 from fastapi import HTTPException
@@ -11,72 +12,58 @@ import asyncio
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
 
+# Initialize OpenAI client
+client = openai.Client(api_key=settings.openai_api_key)
+ASSISTANT_ID = settings.assistant_id  # Add this to your Settings class
 
-async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerator[str, None]:
+async def fetch_assistant_stream(thread_id: str, run_id: str) -> AsyncGenerator[str, None]:
     try:
-        with requests.post(
-            flowise_url, json=payload, stream=True, timeout=30
-        ) as response:
-            response.raise_for_status()
-            logger.info("Connected to Flowise stream")
+        # Wait for run to complete
+        while True:
+            run = client.beta.threads.runs.retrieve(
+                thread_id=thread_id,
+                run_id=run_id
+            )
+            if run.status == "completed":
+                break
+            elif run.status == "failed":
+                raise Exception(f"Assistant run failed: {run.last_error}")
+            await asyncio.sleep(0.5)
+
+        # Get messages, newest first
+        messages = client.beta.threads.messages.list(
+            thread_id=thread_id,
+            order="desc",
+            limit=1
+        )
+        
+        # Get the assistant's response
+        if messages.data:
+            content = messages.data[0].content[0].text.value
             
-            # Track the full message
-            full_message = ""
-            
-            for line in response.iter_lines():
-                if not line:
-                    continue
-                    
-                decoded_line = line.decode("utf-8")
-                logger.info(f"Received line from Flowise: {decoded_line}")
+            # Stream the content word by word
+            words = content.split()
+            for word in words:
+                response = {
+                    "id": f"chatcmpl-{str(uuid.uuid4())}",
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": "thrive/gpt-4o",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "content": word + " "
+                        },
+                        "finish_reason": None
+                    }]
+                }
+                yield f"data: {json.dumps(response)}\n\n"
+                await asyncio.sleep(0.1)  # Simulate streaming
                 
-                try:
-                    # Parse the event and data
-                    if decoded_line.startswith("event:"):
-                        event_type = decoded_line.replace("event:", "").strip()
-                        continue
-                    
-                    if decoded_line.startswith("data:"):
-                        data = json.loads(decoded_line.replace("data:", "").strip())
-                        
-                        # Handle different Flowise events
-                        if event_type == "token":
-                            token = data
-                            if token:
-                                full_message += token
-                                response = {
-                                    "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                    "object": "chat.completion.chunk",
-                                    "created": int(time.time()),
-                                    "model": "thrive/gpt-4o",
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {
-                                            "content": token
-                                        },
-                                        "finish_reason": None
-                                    }]
-                                }
-                                yield f"data: {json.dumps(response)}\n\n"
-                        
-                        elif event_type == "end":
-                            # Send final message
-                            yield "data: [DONE]\n\n"
-                            break
-                        
-                        elif event_type == "error":
-                            error_msg = data.get("error", "Unknown error")
-                            logger.error(f"Flowise error: {error_msg}")
-                            yield f'data: {{"error": "{error_msg}"}}\n\n'
-                            yield "data: [DONE]\n\n"
-                            break
-                            
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse Flowise response: {e}")
-                    continue
+        yield "data: [DONE]\n\n"
                     
     except Exception as e:
-        logger.error(f"Error in fetch_flowise_stream: {e}")
+        logger.error(f"Error in fetch_assistant_stream: {e}")
         yield f'data: {{"error": "{str(e)}"}}\n\n'
         yield "data: [DONE]\n\n"
 
@@ -91,43 +78,29 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, No
         if not content:
             raise ValueError("No content in last message")
 
-        flowise_request_data = {
-            "question": content,
-            "overrideConfig": {
-                "systemMessage": "You are an AI assistant."
-            }
-        }
-
-        FLOWISE_PREDICTION_URL = (
-            f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
+        # Create thread and message
+        thread = client.beta.threads.create()
+        client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=content
         )
 
-        logger.info(f"Sending request to Flowise: {flowise_request_data}")
+        # Run the assistant
+        run = client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=ASSISTANT_ID
+        )
+
+        logger.info(f"Created thread {thread.id} and run {run.id}")
         
-        async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
+        async for chunk in fetch_assistant_stream(thread.id, run.id):
             yield chunk
 
     except Exception as e:
         logger.error(f"Error in handle_chat_completion: {e}")
         yield f'data: {{"error": "{str(e)}"}}\n\n'
         yield "data: [DONE]\n\n"
-
-
-def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
-    try:
-        response = requests.post(flowise_url, json=payload, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        logger.error(f"Error communicating with Flowise: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error communicating with Flowise: {e}"
-        )
-    except json.JSONDecodeError as e:
-        logger.error(f"Error parsing Flowise response: {e.msg}")
-        raise HTTPException(
-            status_code=500, detail=f"Error parsing Flowise response: {e.msg}"
-        )
 
 
 async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -140,20 +113,40 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         if not content:
             raise ValueError("No content in last message")
 
-        flowise_request_data = {
-            "question": content,
-            "overrideConfig": {
-                "systemMessage": "You are an AI assistant."
-            }
-        }
-
-        FLOWISE_PREDICTION_URL = (
-            f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
+        # Create thread and message
+        thread = client.beta.threads.create()
+        client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=content
         )
 
-        flowise_response = fetch_flowise_response(
-            FLOWISE_PREDICTION_URL, flowise_request_data
+        # Run the assistant
+        run = client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=ASSISTANT_ID
         )
+
+        # Wait for completion
+        while True:
+            run = client.beta.threads.runs.retrieve(
+                thread_id=thread.id,
+                run_id=run.id
+            )
+            if run.status == "completed":
+                break
+            elif run.status == "failed":
+                raise Exception(f"Assistant run failed: {run.last_error}")
+            time.sleep(0.5)
+
+        # Get the response
+        messages = client.beta.threads.messages.list(
+            thread_id=thread.id,
+            order="desc",
+            limit=1
+        )
+        
+        assistant_response = messages.data[0].content[0].text.value if messages.data else ""
 
         # Return OpenAI format
         return {
@@ -165,7 +158,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": flowise_response.get("text", "")
+                    "content": assistant_response
                 },
                 "finish_reason": "stop"
             }],
