@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     flowise_api_base_url: str = "http://localhost:1234/api/v1"
     flowise_chatflow_id: str
     assistant_id: Optional[str] = None
+    api_key: str  # Single API key
 
     class Config:
         env_file = ".env"
