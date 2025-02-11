@@ -1,4 +1,4 @@
-from typing import Generator, Dict, Any
+from typing import Generator, Dict, Any, AsyncGenerator
 import requests
 import json
 from src.config.config import Settings
@@ -6,41 +6,57 @@ import logging
 from fastapi import HTTPException
 import time
 import uuid
+import asyncio
 
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
 
 
-def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None, None]:
+async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format: str = None) -> AsyncGenerator[str, None]:
     try:
-        with requests.post(
-            flowise_url, json=payload, stream=True, timeout=30
-        ) as response:
-            response.raise_for_status()
-            logger.info("Connected to Flowise stream")
-            
-            for line in response.iter_lines():
-                if line:
-                    decoded_line = line.decode("utf-8")
-                    logger.info(f"Received line: {decoded_line}")
+        # Make request in a non-blocking way
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None, 
+            lambda: requests.post(flowise_url, json=payload, stream=True, timeout=30)
+        )
+        response.raise_for_status()
+        logger.info("Connected to Flowise stream")
+
+        # Process the stream
+        for line in response.iter_lines():
+            if line:
+                decoded_line = line.decode("utf-8")
+                logger.info(f"Received line: {decoded_line}")
+                
+                if decoded_line.strip() == "[DONE]":
+                    logger.info("Received DONE signal")
+                    yield "data: [DONE]\n\n"
+                    break
                     
-                    if decoded_line.strip() == "[DONE]":
-                        logger.info("Received DONE signal")
-                        yield "data: [DONE]\n\n"
-                        break
+                if decoded_line.startswith("data:"):
+                    try:
+                        data = json.loads(decoded_line.replace("data: ", "").strip())
+                        text = data.get("text", "")
                         
-                    if decoded_line.startswith("data:"):
-                        try:
-                            data = json.loads(decoded_line.replace("data: ", "").strip())
-                            text = data.get("text", "")
-                            
-                            if text:
-                                model = f"openai/{payload['overrideConfig']['model']}"
+                        if text:
+                            if response_format == "message":
+                                # Thrive format
+                                response = {
+                                    "object": "message",
+                                    "id": str(uuid.uuid4()),
+                                    "model": f"thrive/{payload['overrideConfig']['model']}",
+                                    "role": "assistant",
+                                    "content": text,
+                                    "created_at": int(time.time())
+                                }
+                            else:
+                                # OpenAI format
                                 response = {
                                     "id": f"chatcmpl-{str(uuid.uuid4())}",
                                     "object": "chat.completion.chunk",
                                     "created": int(time.time()),
-                                    "model": model,
+                                    "model": f"openai/{payload['overrideConfig']['model']}",
                                     "choices": [{
                                         "index": 0,
                                         "delta": {
@@ -49,14 +65,14 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
                                         "finish_reason": None
                                     }]
                                 }
-                                
-                                chunk = f"data: {json.dumps(response)}\n\n"
-                                logger.info(f"Sending chunk: {chunk}")
-                                yield chunk
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse Flowise response: {e}")
-                            continue
-            
+                            
+                            chunk = f"data: {json.dumps(response)}\n\n"
+                            logger.info(f"Sending chunk: {chunk}")
+                            yield chunk
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse Flowise response: {e}")
+                        continue
+        
     except requests.RequestException as e:
         logger.error(f"Error communicating with Flowise: {e}")
         yield f'data: {{"error": "Error communicating with Flowise: {e}"}}\n\n'
@@ -67,9 +83,16 @@ def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None
 
 async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, None]:
     try:
-        messages = body.get("messages", [])
-        if not messages:
-            raise ValueError("No messages provided in the request.")
+        # Handle both message and chat completion formats
+        content = None
+        if body.get("object") == "message":
+            content = body.get("content")
+            role = body.get("role", "user")
+            messages = [{"role": role, "content": content}]
+        else:
+            messages = body.get("messages", [])
+            if not messages:
+                raise ValueError("No messages provided in the request.")
 
         # Get model preferences and strip provider prefix if present
         primary_model = body.get("model", "").split("/")[-1]  # Strip provider prefix
@@ -101,7 +124,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, N
                 )
 
                 # Try to get response from this model
-                async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
+                async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data, body.get("object")):
                     if '"error":' in chunk:  # Simple error check
                         raise Exception(chunk)
                     yield chunk
