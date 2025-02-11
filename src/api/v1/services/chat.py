@@ -1,200 +1,207 @@
-from typing import Generator, Dict, Any, AsyncGenerator
+from typing import Generator, Dict, Any
 import requests
 import json
-import openai
 from src.config.config import Settings
 import logging
 from fastapi import HTTPException
 import time
 import uuid
-import asyncio
 
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
 
-# Initialize OpenAI client
-client = openai.Client(api_key=settings.openai_api_key)
-ASSISTANT_ID = settings.assistant_id  # Add this to your Settings class
 
-async def fetch_assistant_stream(thread_id: str, run_id: str) -> AsyncGenerator[str, None]:
+def fetch_flowise_stream(flowise_url: str, payload: dict) -> Generator[str, None, None]:
     try:
-        logger.info(f"Starting fetch_assistant_stream for thread {thread_id}, run {run_id}")
-        
-        # Wait for run to complete
-        while True:
-            run = client.beta.threads.runs.retrieve(
-                thread_id=thread_id,
-                run_id=run_id
-            )
-            logger.info(f"Run status: {run.status}")
+        with requests.post(
+            flowise_url, json=payload, stream=True, timeout=30
+        ) as response:
+            response.raise_for_status()
+            logger.info("Connected to Flowise stream")
             
-            if run.status == "completed":
-                break
-            elif run.status == "failed":
-                error_msg = getattr(run, 'last_error', 'Unknown error')
-                logger.error(f"Run failed: {error_msg}")
-                raise Exception(f"Assistant run failed: {error_msg}")
-            elif run.status == "expired":
-                raise Exception("Assistant run expired")
-            await asyncio.sleep(1)
-
-        # Get messages
-        try:
-            messages = client.beta.threads.messages.list(
-                thread_id=thread_id,
-                order="desc",
-                limit=1
-            )
-            logger.info(f"Retrieved messages: {messages}")
-            
-            if not messages.data:
-                raise Exception("No messages returned from assistant")
-                
-            content = messages.data[0].content[0].text.value
-            logger.info(f"Assistant response: {content}")
-            
-            # First send start signal
-            yield "data: {}\n\n"
-            
-            # Stream the content character by character
-            for char in content:
-                response = {
-                    "id": f"chatcmpl-{str(uuid.uuid4())}",
-                    "object": "chat.completion.chunk",
-                    "created": int(time.time()),
-                    "model": "thrive/gpt-4o",
-                    "choices": [{
-                        "index": 0,
-                        "delta": {
-                            "content": char
-                        },
-                        "finish_reason": None
-                    }]
-                }
-                yield f"data: {json.dumps(response)}\n\n"
-                
-            # Send end signal
-            yield "data: [DONE]\n\n"
-            
-        except Exception as e:
-            logger.error(f"Error getting messages: {e}")
-            raise
+            for line in response.iter_lines():
+                if line:
+                    decoded_line = line.decode("utf-8")
+                    logger.info(f"Received line: {decoded_line}")
                     
+                    if decoded_line.strip() == "[DONE]":
+                        logger.info("Received DONE signal")
+                        yield "data: [DONE]\n\n"
+                        break
+                        
+                    if decoded_line.startswith("data:"):
+                        try:
+                            data = json.loads(decoded_line.replace("data: ", "").strip())
+                            text = data.get("text", "")
+                            
+                            if text:
+                                model = f"openai/{payload['overrideConfig']['model']}"
+                                response = {
+                                    "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": model,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {
+                                            "content": text
+                                        },
+                                        "finish_reason": None
+                                    }]
+                                }
+                                
+                                chunk = f"data: {json.dumps(response)}\n\n"
+                                logger.info(f"Sending chunk: {chunk}")
+                                yield chunk
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse Flowise response: {e}")
+                            continue
+            
+    except requests.RequestException as e:
+        logger.error(f"Error communicating with Flowise: {e}")
+        yield f'data: {{"error": "Error communicating with Flowise: {e}"}}\n\n'
     except Exception as e:
-        logger.error(f"Error in fetch_assistant_stream: {str(e)}")
-        yield f'data: {{"error": "{str(e)}"}}\n\n'
-        yield "data: [DONE]\n\n"
+        logger.error(f"Unexpected error: {e}")
+        yield f'data: {{"error": "Unexpected error: {e}"}}\n\n'
 
 
-async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
+async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, None]:
     try:
-        logger.info(f"Received chat completion request: {body}")
-        
         messages = body.get("messages", [])
         if not messages:
-            raise ValueError("No messages provided in request")
+            raise ValueError("No messages provided in the request.")
+
+        # Get model preferences and strip provider prefix if present
+        primary_model = body.get("model", "").split("/")[-1]  # Strip provider prefix
+        fallback_models = [m.split("/")[-1] for m in body.get("models", [])]
         
-        content = messages[-1].get("content")
-        if not content:
-            raise ValueError("No content in last message")
+        # If no models specified, use defaults
+        if not primary_model and not fallback_models:
+            primary_model = "gpt-4o"
+            fallback_models = ["gpt-4", "gpt-3.5-turbo"]
+        elif primary_model and not fallback_models:
+            fallback_models = [primary_model]  # Use primary as fallback
+        
+        # Try models in sequence until one works
+        last_error = None
+        for model in [primary_model] + fallback_models:
+            try:
+                # Format request for Flowise
+                flowise_request_data = {
+                    "question": messages[-1]["content"],
+                    "overrideConfig": {
+                        "returnSourceDocuments": True,
+                        "model": model,  # Pass stripped model name
+                        "systemMessage": "You are an AI assistant powered by Thrive Digital Era."
+                    }
+                }
 
-        # Create thread and message
-        try:
-            thread = client.beta.threads.create()
-            logger.info(f"Created thread: {thread.id}")
-            
-            message = client.beta.threads.messages.create(
-                thread_id=thread.id,
-                role="user",
-                content=content
-            )
-            logger.info(f"Created message: {message.id}")
+                FLOWISE_PREDICTION_URL = (
+                    f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
+                )
 
-            # Run the assistant
-            run = client.beta.threads.runs.create(
-                thread_id=thread.id,
-                assistant_id=ASSISTANT_ID
-            )
-            logger.info(f"Created run: {run.id}")
+                # Try to get response from this model
+                async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
+                    if '"error":' in chunk:  # Simple error check
+                        raise Exception(chunk)
+                    yield chunk
+                return  # Success! Exit the loop
+                
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Model {model} failed: {e}. Trying next model...")
+                continue
+        
+        # If we get here, all models failed
+        if last_error:
+            logger.error(f"All models failed. Last error: {last_error}")
+            yield f'data: {{"error": "All models failed. Last error: {str(last_error)}"}}\n\n'
 
-            async for chunk in fetch_assistant_stream(thread.id, run.id):
-                yield chunk
-
-        except Exception as e:
-            logger.error(f"Error in OpenAI API calls: {e}")
-            raise
-
+    except ValueError as e:
+        logger.error(f"Validation error: {e}")
+        yield f'data: {{"error": "{e}"}}\n\n'
     except Exception as e:
-        logger.error(f"Error in handle_chat_completion: {str(e)}")
-        yield f'data: {{"error": "{str(e)}"}}\n\n'
-        yield "data: [DONE]\n\n"
+        logger.error(f"Unexpected error: {e}")
+        yield f'data: {{"error": "Unexpected error: {e}"}}\n\n'
+
+
+def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
+    try:
+        response = requests.post(flowise_url, json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Error communicating with Flowise: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error communicating with Flowise: {e}"
+        )
+    except json.JSONDecodeError as e:
+        logger.error(f"Error parsing Flowise response: {e.msg}")
+        raise HTTPException(
+            status_code=500, detail=f"Error parsing Flowise response: {e.msg}"
+        )
 
 
 async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        messages = body.get("messages", [])
-        if not messages:
-            raise ValueError("No messages provided in request")
+        # Get content from either format
+        content = body.get("content") if "content" in body else None
+        if content is None:
+            messages = body.get("messages", [])
+            if not messages:
+                raise ValueError("No messages provided in the request.")
+            content = messages[-1].get("content", "")
         
-        content = messages[-1].get("content")
-        if not content:
-            raise ValueError("No content in last message")
-
-        # Create thread and message
-        thread = client.beta.threads.create()
-        client.beta.threads.messages.create(
-            thread_id=thread.id,
-            role="user",
-            content=content
-        )
-
-        # Run the assistant
-        run = client.beta.threads.runs.create(
-            thread_id=thread.id,
-            assistant_id=ASSISTANT_ID
-        )
-
-        # Wait for completion
-        while True:
-            run = client.beta.threads.runs.retrieve(
-                thread_id=thread.id,
-                run_id=run.id
-            )
-            if run.status == "completed":
-                break
-            elif run.status == "failed":
-                raise Exception(f"Assistant run failed: {run.last_error}")
-            time.sleep(0.5)
-
-        # Get the response
-        messages = client.beta.threads.messages.list(
-            thread_id=thread.id,
-            order="desc",
-            limit=1
-        )
+        # Get model and strip provider prefix
+        model = body.get("model", "gpt-4o").split("/")[-1]
         
-        assistant_response = messages.data[0].content[0].text.value if messages.data else ""
-
-        # Return OpenAI format
-        return {
-            "id": f"chatcmpl-{str(uuid.uuid4())}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": "thrive/gpt-4o",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": assistant_response
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0
+        flowise_request_data = {
+            "question": content,
+            "overrideConfig": {
+                "model": model
             }
         }
+
+        FLOWISE_PREDICTION_URL = (
+            f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
+        )
+
+        flowise_response = fetch_flowise_response(
+            FLOWISE_PREDICTION_URL, flowise_request_data
+        )
+
+        # Check if the request is from Thrive (has object="message")
+        if body.get("object") == "message":
+            # Return Thrive format
+            return {
+                "object": "message",
+                "id": str(uuid.uuid4()),
+                "model": body.get("model", "gpt-4o"),
+                "role": "assistant",
+                "content": flowise_response.get("text", ""),
+                "created_at": int(time.time())
+            }
+        else:
+            # Return OpenAI format
+            return {
+                "id": f"chatcmpl-{str(uuid.uuid4())}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": body.get("model", "openai/gpt-4o"),
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": flowise_response.get("text", "")
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                }
+            }
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")

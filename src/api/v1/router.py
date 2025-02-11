@@ -10,11 +10,6 @@ from src.models.openai import ChatCompletionRequest
 router = APIRouter()
 
 
-@router.get("/", tags=["Health"])
-async def health_check():
-    return {"status": "ok"}
-
-
 @router.get("/v1/models", response_model=None, tags=["Models"])
 async def get_models():
     return await get_openai_models()
@@ -22,19 +17,20 @@ async def get_models():
 
 @router.post("/v1/chat/completions", tags=["Completions"])
 async def create_chat_completion(request: Request):
+    # Get raw request body
     body = await request.json()
+    
+    # Check if it's a streaming request
     stream = body.get("stream", False)
     
     if stream:
         return StreamingResponse(
-            handle_chat_completion(body),
+            handle_chat_completion(body), 
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "Content-Type": "text/event-stream",
-                "Access-Control-Allow-Origin": "*",
-                "X-Accel-Buffering": "no"  # Disable nginx buffering
+                "Content-Type": "text/event-stream"
             }
         )
     else:
