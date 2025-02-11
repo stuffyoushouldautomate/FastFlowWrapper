@@ -29,46 +29,51 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format:
                 decoded_line = line.decode("utf-8")
                 logger.info(f"Received line: {decoded_line}")
                 
-                if decoded_line.strip() == "[DONE]":
-                    logger.info("Received DONE signal")
-                    yield "data: [DONE]\n\n"
-                    break
-                    
-                if decoded_line.startswith("data:"):
+                if decoded_line.startswith("data: "):
                     try:
+                        # Parse Flowise event format
                         data = json.loads(decoded_line.replace("data: ", "").strip())
-                        text = data.get("text", "")
                         
-                        if text:
-                            if response_format == "message":
-                                # Thrive format
-                                response = {
-                                    "object": "message",
-                                    "id": str(uuid.uuid4()),
-                                    "model": f"thrive/{payload['overrideConfig']['model']}",
-                                    "role": "assistant",
-                                    "content": text,
-                                    "created_at": int(time.time())
-                                }
-                            else:
-                                # OpenAI format
-                                response = {
-                                    "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                    "object": "chat.completion.chunk",
-                                    "created": int(time.time()),
-                                    "model": f"openai/{payload['overrideConfig']['model']}",
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {
-                                            "content": text
-                                        },
-                                        "finish_reason": None
-                                    }]
-                                }
+                        # Handle different Flowise event types
+                        if data.get("event") == "token" and data.get("data"):
+                            text = data["data"]
                             
-                            chunk = f"data: {json.dumps(response)}\n\n"
-                            logger.info(f"Sending chunk: {chunk}")
-                            yield chunk
+                            if text:
+                                if response_format == "message":
+                                    # Thrive format
+                                    response = {
+                                        "object": "message",
+                                        "id": str(uuid.uuid4()),
+                                        "model": f"thrive/{payload['overrideConfig']['model']}",
+                                        "role": "assistant",
+                                        "content": text,
+                                        "created_at": int(time.time())
+                                    }
+                                else:
+                                    # OpenAI format
+                                    response = {
+                                        "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                        "object": "chat.completion.chunk",
+                                        "created": int(time.time()),
+                                        "model": f"openai/{payload['overrideConfig']['model']}",
+                                        "choices": [{
+                                            "index": 0,
+                                            "delta": {
+                                                "content": text
+                                            },
+                                            "finish_reason": None
+                                        }]
+                                    }
+                                
+                                chunk = f"data: {json.dumps(response)}\n\n"
+                                logger.info(f"Sending chunk: {chunk}")
+                                yield chunk
+                        
+                        elif data.get("event") == "done":
+                            logger.info("Received done event")
+                            yield "data: [DONE]\n\n"
+                            break
+                            
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to parse Flowise response: {e}")
                         continue
@@ -111,12 +116,14 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, No
             try:
                 # Format request for Flowise
                 flowise_request_data = {
+                    "chatflowId": settings.flowise_chatflow_id,
                     "question": messages[-1]["content"],
                     "overrideConfig": {
-                        "returnSourceDocuments": True,
                         "model": model,  # Pass stripped model name
-                        "systemMessage": "You are an AI assistant powered by Thrive Digital Era."
-                    }
+                        "systemMessage": "You are an AI assistant powered by Thrive Digital Era.",
+                        "sessionId": str(uuid.uuid4())  # Add session ID
+                    },
+                    "streaming": True  # Enable streaming
                 }
 
                 FLOWISE_PREDICTION_URL = (
