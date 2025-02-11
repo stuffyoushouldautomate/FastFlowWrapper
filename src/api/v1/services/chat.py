@@ -18,32 +18,46 @@ ASSISTANT_ID = settings.assistant_id  # Add this to your Settings class
 
 async def fetch_assistant_stream(thread_id: str, run_id: str) -> AsyncGenerator[str, None]:
     try:
+        logger.info(f"Starting fetch_assistant_stream for thread {thread_id}, run {run_id}")
+        
         # Wait for run to complete
         while True:
             run = client.beta.threads.runs.retrieve(
                 thread_id=thread_id,
                 run_id=run_id
             )
+            logger.info(f"Run status: {run.status}")
+            
             if run.status == "completed":
                 break
             elif run.status == "failed":
-                raise Exception(f"Assistant run failed: {run.last_error}")
-            await asyncio.sleep(0.5)
+                error_msg = getattr(run, 'last_error', 'Unknown error')
+                logger.error(f"Run failed: {error_msg}")
+                raise Exception(f"Assistant run failed: {error_msg}")
+            elif run.status == "expired":
+                raise Exception("Assistant run expired")
+            await asyncio.sleep(1)
 
-        # Get messages, newest first
-        messages = client.beta.threads.messages.list(
-            thread_id=thread_id,
-            order="desc",
-            limit=1
-        )
-        
-        # Get the assistant's response
-        if messages.data:
-            content = messages.data[0].content[0].text.value
+        # Get messages
+        try:
+            messages = client.beta.threads.messages.list(
+                thread_id=thread_id,
+                order="desc",
+                limit=1
+            )
+            logger.info(f"Retrieved messages: {messages}")
             
-            # Stream the content word by word
-            words = content.split()
-            for word in words:
+            if not messages.data:
+                raise Exception("No messages returned from assistant")
+                
+            content = messages.data[0].content[0].text.value
+            logger.info(f"Assistant response: {content}")
+            
+            # First send start signal
+            yield "data: {}\n\n"
+            
+            # Stream the content character by character
+            for char in content:
                 response = {
                     "id": f"chatcmpl-{str(uuid.uuid4())}",
                     "object": "chat.completion.chunk",
@@ -52,24 +66,30 @@ async def fetch_assistant_stream(thread_id: str, run_id: str) -> AsyncGenerator[
                     "choices": [{
                         "index": 0,
                         "delta": {
-                            "content": word + " "
+                            "content": char
                         },
                         "finish_reason": None
                     }]
                 }
                 yield f"data: {json.dumps(response)}\n\n"
-                await asyncio.sleep(0.1)  # Simulate streaming
                 
-        yield "data: [DONE]\n\n"
+            # Send end signal
+            yield "data: [DONE]\n\n"
+            
+        except Exception as e:
+            logger.error(f"Error getting messages: {e}")
+            raise
                     
     except Exception as e:
-        logger.error(f"Error in fetch_assistant_stream: {e}")
+        logger.error(f"Error in fetch_assistant_stream: {str(e)}")
         yield f'data: {{"error": "{str(e)}"}}\n\n'
         yield "data: [DONE]\n\n"
 
 
 async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
     try:
+        logger.info(f"Received chat completion request: {body}")
+        
         messages = body.get("messages", [])
         if not messages:
             raise ValueError("No messages provided in request")
@@ -79,26 +99,33 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, No
             raise ValueError("No content in last message")
 
         # Create thread and message
-        thread = client.beta.threads.create()
-        client.beta.threads.messages.create(
-            thread_id=thread.id,
-            role="user",
-            content=content
-        )
+        try:
+            thread = client.beta.threads.create()
+            logger.info(f"Created thread: {thread.id}")
+            
+            message = client.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=content
+            )
+            logger.info(f"Created message: {message.id}")
 
-        # Run the assistant
-        run = client.beta.threads.runs.create(
-            thread_id=thread.id,
-            assistant_id=ASSISTANT_ID
-        )
+            # Run the assistant
+            run = client.beta.threads.runs.create(
+                thread_id=thread.id,
+                assistant_id=ASSISTANT_ID
+            )
+            logger.info(f"Created run: {run.id}")
 
-        logger.info(f"Created thread {thread.id} and run {run.id}")
-        
-        async for chunk in fetch_assistant_stream(thread.id, run.id):
-            yield chunk
+            async for chunk in fetch_assistant_stream(thread.id, run.id):
+                yield chunk
+
+        except Exception as e:
+            logger.error(f"Error in OpenAI API calls: {e}")
+            raise
 
     except Exception as e:
-        logger.error(f"Error in handle_chat_completion: {e}")
+        logger.error(f"Error in handle_chat_completion: {str(e)}")
         yield f'data: {{"error": "{str(e)}"}}\n\n'
         yield "data: [DONE]\n\n"
 
