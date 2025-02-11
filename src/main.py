@@ -1,10 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.v1.router import router
+from src.api.v1.router import router
 
-app = FastAPI(title="FastFlowWrapper")
+app = FastAPI(
+    title="Flowise OpenAI Wrapper",
+    description="A FastAPI application that converts Flowise APIs to OpenAI standards.",
+    version="1.0.0",
+)
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,7 +16,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include the router
 app.include_router(router)
 
 @app.get("/", tags=["Root"])
