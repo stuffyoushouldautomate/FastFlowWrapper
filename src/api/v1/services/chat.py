@@ -81,7 +81,7 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format:
         yield f'data: {{"error": "Unexpected error: {e}"}}\n\n'
 
 
-async def handle_chat_completion(body: Dict[str, Any]) -> Generator[str, None, None]:
+async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
     try:
         # Handle both message and chat completion formats
         content = None

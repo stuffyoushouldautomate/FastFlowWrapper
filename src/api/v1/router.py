@@ -25,12 +25,13 @@ async def create_chat_completion(request: Request):
     
     if stream:
         return StreamingResponse(
-            handle_chat_completion(body), 
+            handle_chat_completion(body),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "Content-Type": "text/event-stream"
+                "Content-Type": "text/event-stream",
+                "Transfer-Encoding": "chunked"
             }
         )
     else:
