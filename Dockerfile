@@ -4,18 +4,23 @@ FROM python:3.9-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    python3-dev \
+    gcc \
+    g++
 
-# Install Python dependencies
+# Upgrade pip and install wheel
+RUN pip install --upgrade pip && \
+    pip install wheel
+
+# Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy the rest of the application code
 COPY . .
 
-# Command to run the application
+# Use Railway's PORT environment variable
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
