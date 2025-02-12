@@ -231,7 +231,7 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
                 "id": f"chatcmpl-{str(uuid.uuid4())}",
                 "object": "chat.completion",
                 "created": int(time.time()),
-                "model": body.get("model", "openai/gpt-4o"),
+                "model": body.get("model", "henjii/gpt-4o"),
                 "choices": [{
                     "index": 0,
                     "message": {
