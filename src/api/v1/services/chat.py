@@ -19,77 +19,77 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format:
             async with client.stream("POST", flowise_url, json=payload, timeout=30) as response:
                 response.raise_for_status()
                 logger.info("Connected to Flowise stream")
-                logger.info(f"Response headers: {response.headers}")  # Log headers
                 
                 buffer = ""
-                async for line in response.aiter_lines():
-                    logger.info(f"Raw line: {line}")  # Log raw lines
-                    if not line:
-                        continue
-                        
-                    buffer += line + "\n"
+                async for chunk in response.aiter_text():
+                    buffer += chunk
                     
-                    if buffer.endswith("\n\n"):
-                        messages = buffer.strip().split("\n")
-                        buffer = ""
-                        
-                        for message in messages:
-                            if not message.startswith("data: "):
-                                continue
+                    while True:
+                        try:
+                            # Find the next complete SSE line
+                            line_end = buffer.find('\n')
+                            if line_end == -1:
+                                break
                                 
-                            data = message.replace("data: ", "").strip()
-                            if not data:
-                                continue
-                                
-                            try:
-                                parsed = json.loads(data)
-                                logger.info(f"Parsed data: {parsed}")
-                                
-                                # Handle both text and token events
-                                text = None
-                                if parsed.get("event") == "token" and parsed.get("data"):
-                                    text = parsed["data"]
-                                elif parsed.get("text"):  # Direct text response
-                                    text = parsed["text"]
-                                    
-                                if text:
-                                    if response_format == "message":
-                                        response = {
-                                            "object": "message",
-                                            "id": str(uuid.uuid4()),
-                                            "model": f"thrive/{payload['overrideConfig']['model']}",
-                                            "role": "assistant",
-                                            "content": text,
-                                            "created_at": int(time.time())
-                                        }
-                                    else:
-                                        response = {
-                                            "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                            "object": "chat.completion.chunk",
-                                            "created": int(time.time()),
-                                            "model": f"openai/{payload['overrideConfig']['model']}",
-                                            "choices": [{
-                                                "index": 0,
-                                                "delta": {
-                                                    "content": text
-                                                },
-                                                "finish_reason": None
-                                            }]
-                                        }
-                                    
-                                    chunk = f"data: {json.dumps(response)}\n\n"
-                                    logger.info(f"Sending chunk: {chunk}")
-                                    yield chunk
-                                    
-                                elif parsed.get("event") == "done":
-                                    logger.info("Received done event")
+                            line = buffer[:line_end].strip()
+                            buffer = buffer[line_end + 1:]
+                            
+                            if line.startswith('data: '):
+                                data = line[6:]
+                                if data == '[DONE]':
                                     yield "data: [DONE]\n\n"
                                     break
                                     
-                            except json.JSONDecodeError as e:
-                                logger.error(f"Failed to parse Flowise response: {e}")
-                                continue
-                                
+                                try:
+                                    parsed = json.loads(data)
+                                    logger.info(f"Parsed data: {parsed}")
+                                    
+                                    # Handle both Flowise token events and direct text
+                                    text = None
+                                    if parsed.get("event") == "token" and parsed.get("data"):
+                                        text = parsed["data"]
+                                    elif parsed.get("text"):
+                                        text = parsed["text"]
+                                        
+                                    if text:
+                                        if response_format == "message":
+                                            # Thrive format
+                                            response = {
+                                                "object": "message",
+                                                "id": str(uuid.uuid4()),
+                                                "model": f"henjii/{payload['overrideConfig']['model']}",
+                                                "role": "assistant",
+                                                "content": text,
+                                                "created_at": int(time.time())
+                                            }
+                                        else:
+                                            # OpenAI format
+                                            response = {
+                                                "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                                "object": "chat.completion.chunk",
+                                                "created": int(time.time()),
+                                                "model": f"henjii/{payload['overrideConfig']['model']}",
+                                                "choices": [{
+                                                    "index": 0,
+                                                    "delta": {
+                                                        "content": text
+                                                    },
+                                                    "finish_reason": None
+                                                }]
+                                            }
+                                            
+                                        chunk = f"data: {json.dumps(response)}\n\n"
+                                        logger.info(f"Sending chunk: {chunk}")
+                                        yield chunk
+                                        
+                                except json.JSONDecodeError:
+                                    logger.warning(f"Failed to parse JSON: {data}")
+                                    continue
+                                    
+                        except Exception as e:
+                            logger.error(f"Error processing chunk: {e}")
+                            break
+                            
     except httpx.RequestError as e:
         logger.error(f"Error communicating with Flowise: {e}")
         yield f'data: {{"error": "Error communicating with Flowise: {e}"}}\n\n'
