@@ -8,6 +8,7 @@ import uuid
 import asyncio
 from fastapi import HTTPException
 import requests
+import tiktoken
 
 logger = logging.getLogger("uvicorn.error")
 settings = get_settings()
@@ -114,51 +115,88 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, No
 
 def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
     try:
+        logger.info(f"Sending request to Flowise URL: {flowise_url}")
+        logger.info(f"Request payload: {json.dumps(payload)}")
+        
         response = requests.post(flowise_url, json=payload, timeout=30)
+        logger.info(f"Flowise response status: {response.status_code}")
+        
         response.raise_for_status()
-        return response.json()
+        response_json = response.json()
+        logger.info(f"Flowise response: {json.dumps(response_json)}")
+        
+        return response_json
+        
     except requests.RequestException as e:
         logger.error(f"Error communicating with Flowise: {e}")
+        logger.error(f"Response content: {getattr(e.response, 'text', 'No response content')}")
         raise HTTPException(
-            status_code=500, detail=f"Error communicating with Flowise: {e}"
+            status_code=500, detail=f"Error communicating with Flowise: {str(e)}"
         )
     except json.JSONDecodeError as e:
         logger.error(f"Error parsing Flowise response: {e.msg}")
+        logger.error(f"Raw response: {response.text}")
         raise HTTPException(
             status_code=500, detail=f"Error parsing Flowise response: {e.msg}"
         )
 
 
+def count_tokens(text: str, model: str = "gpt-4") -> int:
+    """Count the number of tokens in a text string."""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+        return len(encoding.encode(text))
+    except Exception as e:
+        logger.error(f"Error counting tokens: {e}")
+        return 0
+
+
 async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        # Get content from either format
-        content = body.get("content") if "content" in body else None
-        if content is None:
-            messages = body.get("messages", [])
-            if not messages:
-                raise ValueError("No messages provided in the request.")
-            content = messages[-1].get("content", "")
+        logger.info(f"Received request body: {json.dumps(body)}")
+        
+        # Get content from messages
+        messages = body.get("messages", [])
+        if not messages:
+            raise ValueError("No messages provided in the request.")
+        content = messages[-1].get("content", "")
         
         # Get model and strip provider prefix
         model = body.get("model", "gpt-4o").split("/")[-1]
         
+        # Extract or generate session ID
+        session_id = (
+            body.get("session_id")
+            or f"thread_{str(uuid.uuid4()).replace('-', '')}"
+        )
+        
         flowise_request_data = {
             "question": content,
             "overrideConfig": {
-                "model": model
-            }
+                "model": model,
+                "systemMessage": "You are an AI assistant powered by Henjii Digital Era."
+            },
+            "sessionId": session_id,
+            "history": messages[:-1]
         }
+
+        logger.info(f"Prepared Flowise request data: {json.dumps(flowise_request_data)}")
 
         FLOWISE_PREDICTION_URL = (
             f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
         )
-
+        
         flowise_response = fetch_flowise_response(
             FLOWISE_PREDICTION_URL, flowise_request_data
         )
 
-        # Return OpenAI format
-        return {
+        # Calculate token usage
+        response_text = flowise_response.get("text", "")
+        prompt_tokens = sum(count_tokens(msg["content"]) for msg in messages)
+        completion_tokens = count_tokens(response_text)
+        total_tokens = prompt_tokens + completion_tokens
+
+        response = {
             "id": f"chatcmpl-{str(uuid.uuid4())}",
             "object": "chat.completion",
             "created": int(time.time()),
@@ -167,20 +205,26 @@ async def handle_chat_completion_sync(body: Dict[str, Any]) -> Dict[str, Any]:
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": flowise_response.get("text", "")
+                    "content": response_text
                 },
                 "finish_reason": "stop"
             }],
             "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0
-            }
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens
+            },
+            "session_id": session_id
         }
+        
+        logger.info(f"Token usage - Prompt: {prompt_tokens}, Completion: {completion_tokens}, Total: {total_tokens}")
+        logger.info(f"Returning response: {json.dumps(response)}")
+        return response
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="Unexpected error occurred.")
+        logger.error(f"Unexpected error in handle_chat_completion_sync: {str(e)}")
+        logger.exception("Full traceback:")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
