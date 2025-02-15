@@ -5,4 +5,4 @@ pydantic==2.6.1
 pydantic-settings==2.1.0
 requests==2.31.0
 httpx==0.26.0
-portkey_ai==0.8.1 
+portkey_ai==1.10.2 
