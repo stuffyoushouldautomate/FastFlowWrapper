@@ -2,6 +2,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from src.api.v1.router import router as api_router
 from src.middleware.auth import verify_api_key
+import logging
+
+logger = logging.getLogger("uvicorn")
 
 app = FastAPI(
     title="Flowise OpenAI Wrapper",
@@ -18,6 +21,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Application startup")
+
 # Add authentication middleware but exclude healthcheck
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -30,6 +37,7 @@ app.include_router(api_router)
 
 @app.get("/health")
 async def health_check():
+    logger.info("Health check called")
     return {"status": "healthy"}
 
 @app.get("/")
