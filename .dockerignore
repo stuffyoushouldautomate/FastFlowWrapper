@@ -3,6 +3,7 @@ __pycache__
 .env
 .git
 .gitignore
+myenv/
 .pytest_cache
 .coverage
-htmlcov 
+htmlcov/ 

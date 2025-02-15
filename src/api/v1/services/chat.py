@@ -1,13 +1,11 @@
-from typing import Generator, Dict, Any, AsyncGenerator
-import requests
+from typing import AsyncGenerator, Dict, Any
+import httpx
 import json
 from src.config.config import Settings
 import logging
-from fastapi import HTTPException
 import time
 import uuid
 import asyncio
-import httpx
 
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
