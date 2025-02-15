@@ -20,56 +20,58 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
                 response.raise_for_status()
                 logger.info("Connected to Flowise stream")
 
-                # Handle initial response
-                content = ""
-                async for line in response.aiter_lines():
-                    logger.info(f"Raw line: {line}")
-                    
-                    if not line:
-                        continue
+                buffer = ""
+                async for chunk in response.aiter_text():
+                    logger.info(f"Raw chunk: {chunk}")
+                    buffer += chunk
+
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
                         
-                    try:
-                        data = json.loads(line)
-                        logger.info(f"Parsed data: {data}")
-                        
-                        # Extract message content
-                        if isinstance(data, list) and len(data) > 0:
-                            messages = data[0].get("messages", [])
-                            if messages and len(messages) > 1:  # Get bot response
-                                bot_message = messages[-1]
-                                if bot_message["role"] == "bot":
-                                    content = bot_message["content"]
-                                    
-                                    # Stream each word
-                                    words = content.split()
-                                    for word in words:
-                                        response = {
-                                            "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                            "object": "chat.completion.chunk",
-                                            "created": int(time.time()),
-                                            "model": "henjii/gpt-4o",
-                                            "choices": [{
-                                                "index": 0,
-                                                "delta": {
-                                                    "content": word + " "
-                                                },
-                                                "finish_reason": None
-                                            }]
-                                        }
-                                        
-                                        chunk = f"data: {json.dumps(response)}\n\n"
-                                        logger.info(f"Sending chunk: {chunk}")
-                                        yield chunk
-                                        await asyncio.sleep(0.1)  # Add small delay between words
-                                        
-                        # Send DONE after full message
-                        if content:
-                            yield "data: [DONE]\n\n"
-                            return
+                        if not line:
+                            continue
+
+                        try:
+                            data = json.loads(line)
+                            logger.info(f"Parsed data: {data}")
                             
-                    except json.JSONDecodeError as e:
-                        logger.error(f"JSON decode error: {e} for line: {line}")
-                        continue
+                            if isinstance(data, list) and len(data) > 0:
+                                messages = data[0].get("messages", [])
+                                if messages and len(messages) > 1:
+                                    bot_message = messages[-1]
+                                    if bot_message["role"] == "bot":
+                                        content = bot_message["content"]
+                                        
+                                        # Stream each word
+                                        words = content.split()
+                                        for word in words:
+                                            response = {
+                                                "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                                "object": "chat.completion.chunk",
+                                                "created": int(time.time()),
+                                                "model": "henjii/gpt-4o",
+                                                "choices": [{
+                                                    "index": 0,
+                                                    "delta": {
+                                                        "content": word + " "
+                                                    },
+                                                    "finish_reason": None
+                                                }]
+                                            }
+                                            
+                                            chunk = f"data: {json.dumps(response)}\n\n"
+                                            logger.info(f"Sending chunk: {chunk}")
+                                            yield chunk
+                                            await asyncio.sleep(0.05)  # Reduced delay
+                                        
+                                        # Send DONE after full message
+                                        yield "data: [DONE]\n\n"
+                                        return
+
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSON decode error: {e} for line: {line}")
+                            continue
 
     except Exception as e:
         logger.error(f"Error in fetch_flowise_stream: {e}")
