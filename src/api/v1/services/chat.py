@@ -8,100 +8,72 @@ import time
 import uuid
 import asyncio
 import httpx
-from portkey_ai import Portkey
 
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
 
-# Initialize Portkey
-portkey = Portkey(
-    api_key=settings.portkey_api_key,
-    virtual_key=settings.portkey_virtual_key,
-)
 
-async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format: str = None) -> AsyncGenerator[str, None]:
+async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerator[str, None]:
     try:
         async with httpx.AsyncClient() as client:
-            async with client.stream("POST", flowise_url, json=payload, timeout=30) as response:
+            async with client.stream("POST", flowise_url, json=payload, timeout=30.0) as response:
                 response.raise_for_status()
                 logger.info("Connected to Flowise stream")
-                
-                buffer = ""
-                async for chunk in response.aiter_text():
-                    buffer += chunk
+
+                # Handle initial response
+                content = ""
+                async for line in response.aiter_lines():
+                    logger.info(f"Raw line: {line}")
                     
-                    while True:
-                        try:
-                            # Find the next complete SSE line
-                            line_end = buffer.find('\n')
-                            if line_end == -1:
-                                break
-                                
-                            line = buffer[:line_end].strip()
-                            buffer = buffer[line_end + 1:]
-                            
-                            if line.startswith('data: '):
-                                data = line[6:]
-                                if data == '[DONE]':
-                                    yield "data: [DONE]\n\n"
-                                    break
+                    if not line:
+                        continue
+                        
+                    try:
+                        data = json.loads(line)
+                        logger.info(f"Parsed data: {data}")
+                        
+                        # Extract message content
+                        if isinstance(data, list) and len(data) > 0:
+                            messages = data[0].get("messages", [])
+                            if messages and len(messages) > 1:  # Get bot response
+                                bot_message = messages[-1]
+                                if bot_message["role"] == "bot":
+                                    content = bot_message["content"]
                                     
-                                try:
-                                    parsed = json.loads(data)
-                                    logger.info(f"Parsed data: {parsed}")
-                                    
-                                    # Handle both Flowise token events and direct text
-                                    text = None
-                                    if parsed.get("event") == "token" and parsed.get("data"):
-                                        text = parsed["data"]
-                                    elif parsed.get("text"):
-                                        text = parsed["text"]
+                                    # Stream each word
+                                    words = content.split()
+                                    for word in words:
+                                        response = {
+                                            "id": f"chatcmpl-{str(uuid.uuid4())}",
+                                            "object": "chat.completion.chunk",
+                                            "created": int(time.time()),
+                                            "model": "henjii/gpt-4o",
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {
+                                                    "content": word + " "
+                                                },
+                                                "finish_reason": None
+                                            }]
+                                        }
                                         
-                                    if text:
-                                        if response_format == "message":
-                                            # Thrive format
-                                            response = {
-                                                "object": "message",
-                                                "id": str(uuid.uuid4()),
-                                                "model": f"henjii/{payload['overrideConfig']['model']}",
-                                                "role": "assistant",
-                                                "content": text,
-                                                "created_at": int(time.time())
-                                            }
-                                        else:
-                                            # OpenAI format
-                                            response = {
-                                                "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                                "object": "chat.completion.chunk",
-                                                "created": int(time.time()),
-                                                "model": f"henjii/{payload['overrideConfig']['model']}",
-                                                "choices": [{
-                                                    "index": 0,
-                                                    "delta": {
-                                                        "content": text
-                                                    },
-                                                    "finish_reason": None
-                                                }]
-                                            }
-                                            
                                         chunk = f"data: {json.dumps(response)}\n\n"
                                         logger.info(f"Sending chunk: {chunk}")
                                         yield chunk
+                                        await asyncio.sleep(0.1)  # Add small delay between words
                                         
-                                except json.JSONDecodeError:
-                                    logger.warning(f"Failed to parse JSON: {data}")
-                                    continue
-                                    
-                        except Exception as e:
-                            logger.error(f"Error processing chunk: {e}")
-                            break
+                        # Send DONE after full message
+                        if content:
+                            yield "data: [DONE]\n\n"
+                            return
                             
-    except httpx.RequestError as e:
-        logger.error(f"Error communicating with Flowise: {e}")
-        yield f'data: {{"error": "Error communicating with Flowise: {e}"}}\n\n'
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON decode error: {e} for line: {line}")
+                        continue
+
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        yield f'data: {{"error": "Unexpected error: {e}"}}\n\n'
+        logger.error(f"Error in fetch_flowise_stream: {e}")
+        yield f'data: {{"error": "Streaming error: {str(e)}"}}\n\n'
 
 
 async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
@@ -113,43 +85,29 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, No
         # Get model preferences and strip provider prefix if present
         primary_model = body.get("model", "").split("/")[-1]  # Strip provider prefix
         
-        # If streaming is requested
-        if body.get("stream", False):
-            async for chunk in fetch_flowise_stream(messages[-1]["content"], primary_model, body.get("object")):
-                yield chunk
-        else:
-            # Use Portkey for non-streaming requests
-            completion = portkey.chat.completions.create(
-                messages=messages,
-                model=primary_model,
-                max_tokens=4096,
-                temperature=body.get("temperature", 0.7)
-            )
-            
-            response = {
-                "id": completion.id,
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": f"henjii/{primary_model}",
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": completion.choices[0].message.content
-                    },
-                    "finish_reason": completion.choices[0].finish_reason
-                }],
-                "usage": completion.usage
-            }
-            
-            yield json.dumps(response)
+        # Format request for Flowise
+        flowise_request_data = {
+            "question": messages[-1]["content"],
+            "overrideConfig": {
+                "model": primary_model,
+                "systemMessage": "You are an AI assistant powered by Henjii Digital Era."
+            },
+            "sessionId": f"thread_{str(uuid.uuid4()).replace('-', '')}",
+            "streaming": True
+        }
 
-    except ValueError as e:
-        logger.error(f"Validation error: {e}")
-        yield f'data: {{"error": "{e}"}}\n\n'
+        FLOWISE_PREDICTION_URL = (
+            f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
+        )
+
+        logger.info(f"Sending request to Flowise: {json.dumps(flowise_request_data)}")
+        
+        async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
+            yield chunk
+
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        yield f'data: {{"error": "Unexpected error: {e}"}}\n\n'
+        logger.error(f"Error in handle_chat_completion: {e}")
+        yield f'data: {{"error": "Error: {str(e)}"}}\n\n'
 
 
 def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
