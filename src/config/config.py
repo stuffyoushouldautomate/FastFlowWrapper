@@ -1,15 +1,16 @@
-from pydantic_settings import BaseSettings
-from typing import Optional
+from pydantic import BaseModel
+from functools import lru_cache
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
-class Settings(BaseSettings):
+class Settings(BaseModel):
     flowise_api_base_url: str = "http://localhost:1234/api/v1"
-    flowise_chatflow_id: str
-    assistant_id: Optional[str] = None
-    api_key: str  # Single API key
-    portkey_api_key: str
-    portkey_virtual_key: str
+    flowise_chatflow_id: str = os.getenv("FLOWISE_CHATFLOW_ID")
+    api_key: str = os.getenv("API_KEY")  # Single API key for authentication
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings()

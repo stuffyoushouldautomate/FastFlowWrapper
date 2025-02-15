@@ -1,14 +1,14 @@
 from typing import AsyncGenerator, Dict, Any
 import httpx
 import json
-from src.config.config import Settings
+from src.config.config import get_settings
 import logging
 import time
 import uuid
 import asyncio
 
 logger = logging.getLogger("uvicorn.error")
-settings = Settings()
+settings = get_settings()
 
 
 async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerator[str, None]:
