@@ -8,10 +8,16 @@ import time
 import uuid
 import asyncio
 import httpx
+from portkey_ai import Portkey
 
 logger = logging.getLogger("uvicorn.error")
 settings = Settings()
 
+# Initialize Portkey
+portkey = Portkey(
+    api_key=settings.portkey_api_key,
+    virtual_key=settings.portkey_virtual_key,
+)
 
 async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format: str = None) -> AsyncGenerator[str, None]:
     try:
@@ -100,66 +106,43 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, response_format:
 
 async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
     try:
-        # Handle both message and chat completion formats
-        content = None
-        if body.get("object") == "message":
-            content = body.get("content")
-            role = body.get("role", "user")
-            messages = [{"role": role, "content": content}]
-        else:
-            messages = body.get("messages", [])
-            if not messages:
-                raise ValueError("No messages provided in the request.")
+        messages = body.get("messages", [])
+        if not messages:
+            raise ValueError("No messages provided in the request.")
 
         # Get model preferences and strip provider prefix if present
         primary_model = body.get("model", "").split("/")[-1]  # Strip provider prefix
-        fallback_models = [m.split("/")[-1] for m in body.get("models", [])]
         
-        # If no models specified, use defaults
-        if not primary_model and not fallback_models:
-            primary_model = "gpt-4o"
-            fallback_models = ["gpt-4", "gpt-3.5-turbo"]
-        elif primary_model and not fallback_models:
-            fallback_models = [primary_model]  # Use primary as fallback
-        
-        # Try models in sequence until one works
-        last_error = None
-        for model in [primary_model] + fallback_models:
-            try:
-                # Format request for Flowise
-                flowise_request_data = {
-                    "question": messages[-1]["content"],
-                    "overrideConfig": {
-                        "model": model,
-                        "systemMessage": "You are an AI assistant powered by Thrive Digital Era.",
-                        "sessionId": str(uuid.uuid4())
+        # If streaming is requested
+        if body.get("stream", False):
+            async for chunk in fetch_flowise_stream(messages[-1]["content"], primary_model, body.get("object")):
+                yield chunk
+        else:
+            # Use Portkey for non-streaming requests
+            completion = portkey.chat.completions.create(
+                messages=messages,
+                model=primary_model,
+                max_tokens=4096,
+                temperature=body.get("temperature", 0.7)
+            )
+            
+            response = {
+                "id": completion.id,
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": f"henjii/{primary_model}",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": completion.choices[0].message.content
                     },
-                    "stream": True  # Change streaming to stream
-                }
-
-                FLOWISE_PREDICTION_URL = (
-                    f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
-                )
-
-                logger.info(f"Sending request to Flowise: {flowise_request_data}")
-                
-                # Try to get response from this model
-                async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data, body.get("object")):
-                    logger.info(f"Received chunk: {chunk}")  # Add more logging
-                    if '"error":' in chunk:
-                        raise Exception(chunk)
-                    yield chunk
-                return
-                
-            except Exception as e:
-                last_error = e
-                logger.warning(f"Model {model} failed: {e}. Trying next model...")
-                continue
-        
-        # If we get here, all models failed
-        if last_error:
-            logger.error(f"All models failed. Last error: {last_error}")
-            yield f'data: {{"error": "All models failed. Last error: {str(last_error)}"}}\n\n'
+                    "finish_reason": completion.choices[0].finish_reason
+                }],
+                "usage": completion.usage
+            }
+            
+            yield json.dumps(response)
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")

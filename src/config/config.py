@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     flowise_chatflow_id: str
     assistant_id: Optional[str] = None
     api_key: str  # Single API key
+    portkey_api_key: str
+    portkey_virtual_key: str
 
     class Config:
         env_file = ".env"
