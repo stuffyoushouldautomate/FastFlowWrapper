@@ -3,7 +3,7 @@ from src.config.config import Settings
 
 settings = Settings()
 
-async def verify_api_key(request: Request):
+async def verify_api_key(request: Request, call_next):
     auth_header = request.headers.get("Authorization")
     
     if not auth_header:
@@ -30,4 +30,6 @@ async def verify_api_key(request: Request):
         raise HTTPException(
             status_code=401,
             detail="Invalid authorization header format. Use 'Bearer YOUR_API_KEY'"
-        ) 
+        )
+    
+    return await call_next(request) 
