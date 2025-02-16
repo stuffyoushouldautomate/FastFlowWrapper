@@ -28,7 +28,7 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
 
                 buffer = ""
                 async for chunk in response.aiter_text():
-                    logger.info(f"Raw chunk received: {chunk}")  # Log raw chunks
+                    logger.info(f"Raw chunk received: {chunk}")
                     buffer += chunk
 
                     while "\n" in buffer:
@@ -40,11 +40,12 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
 
                         try:
                             data = json.loads(line)
-                            logger.info(f"Parsed data: {data}")  # Log parsed data
+                            logger.info(f"Parsed data: {data}")
                             
                             if isinstance(data, dict) and "text" in data:
-                                # Handle direct text response
                                 content = data["text"]
+                                
+                                # Format exactly as OpenAI for PHP client
                                 response = {
                                     "id": f"chatcmpl-{str(uuid.uuid4())}",
                                     "object": "chat.completion.chunk",
@@ -58,38 +59,16 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
                                         "finish_reason": None
                                     }]
                                 }
+                                
+                                # Format as SSE data line
                                 chunk = f"data: {json.dumps(response)}\n\n"
                                 logger.info(f"Sending chunk: {chunk}")
                                 yield chunk
-                            
-                            elif isinstance(data, list) and len(data) > 0:
-                                messages = data[0].get("messages", [])
-                                if messages and len(messages) > 1:
-                                    bot_message = messages[-1]
-                                    if bot_message["role"] == "bot":
-                                        content = bot_message["content"]
-                                        response = {
-                                            "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                            "object": "chat.completion.chunk",
-                                            "created": int(time.time()),
-                                            "model": "henjii/gpt-4o",
-                                            "choices": [{
-                                                "index": 0,
-                                                "delta": {
-                                                    "content": content
-                                                },
-                                                "finish_reason": None
-                                            }]
-                                        }
-                                        chunk = f"data: {json.dumps(response)}\n\n"
-                                        logger.info(f"Sending chunk: {chunk}")
-                                        yield chunk
-
                         except json.JSONDecodeError as e:
                             logger.error(f"JSON decode error: {e} for line: {line}")
                             continue
 
-                # Send DONE after full message
+                # Send proper DONE message
                 yield "data: [DONE]\n\n"
                 return
 
@@ -97,11 +76,12 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
         logger.error(f"Error in fetch_flowise_stream: {e}")
         error_response = {
             "error": {
-                "message": f"Streaming error: {str(e)}",
+                "message": str(e),
                 "type": "server_error",
-                "code": 500
+                "code": "500"
             }
         }
+        # Format error as SSE data line
         yield f"data: {json.dumps(error_response)}\n\n"
         yield "data: [DONE]\n\n"
 
