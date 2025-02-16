@@ -16,8 +16,13 @@ settings = get_settings()
 
 async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerator[str, None]:
     try:
+        headers = {
+            "Authorization": f"Bearer {settings.api_key}",
+            "Content-Type": "application/json"
+        }
+        
         async with httpx.AsyncClient() as client:
-            async with client.stream("POST", flowise_url, json=payload, timeout=30.0) as response:
+            async with client.stream("POST", flowise_url, json=payload, headers=headers, timeout=30.0) as response:
                 response.raise_for_status()
                 logger.info("Connected to Flowise stream")
 
@@ -118,7 +123,13 @@ def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
         logger.info(f"Sending request to Flowise URL: {flowise_url}")
         logger.info(f"Request payload: {json.dumps(payload)}")
         
-        response = requests.post(flowise_url, json=payload, timeout=30)
+        # Add Authorization header for Flowise
+        headers = {
+            "Authorization": f"Bearer {settings.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.post(flowise_url, json=payload, headers=headers, timeout=30)
         logger.info(f"Flowise response status: {response.status_code}")
         
         response.raise_for_status()
@@ -126,18 +137,11 @@ def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
         logger.info(f"Flowise response: {json.dumps(response_json)}")
         
         return response_json
-        
     except requests.RequestException as e:
         logger.error(f"Error communicating with Flowise: {e}")
         logger.error(f"Response content: {getattr(e.response, 'text', 'No response content')}")
         raise HTTPException(
-            status_code=500, detail=f"Error communicating with Flowise: {str(e)}"
-        )
-    except json.JSONDecodeError as e:
-        logger.error(f"Error parsing Flowise response: {e.msg}")
-        logger.error(f"Raw response: {response.text}")
-        raise HTTPException(
-            status_code=500, detail=f"Error parsing Flowise response: {e.msg}"
+            status_code=500, detail=f"Error communicating with Flowise: {e}"
         )
 
 
