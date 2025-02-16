@@ -38,8 +38,20 @@ async def create_chat_completion(
     body: Dict[str, Any] = Body(...),
 ):
     """Create a chat completion"""
-    if body.get("stream", False):
-        return handle_chat_completion(body)
+    # Check for both stream and streaming parameters
+    is_streaming = body.get("stream", False) or body.get("streaming", False)
+    
+    if is_streaming:
+        return StreamingResponse(
+            handle_chat_completion(body),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream",
+                "Transfer-Encoding": "chunked"
+            }
+        )
     return await handle_chat_completion_sync(body)
 
 
