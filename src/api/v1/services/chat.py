@@ -120,15 +120,15 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         parent_id = last_message.get("parent_id")
         
         # Format request for Flowise
-        conversation_id = f"thread_{str(uuid.uuid4()).replace('-', '')}"
+        conversation_id = str(uuid.uuid4())  # Clean UUID for session ID
         flowise_request_data = {
             "question": question,
             "overrideConfig": {
                 "model": primary_model,
                 "systemMessage": "You are an AI assistant powered by Henjii Digital Era."
             },
-            "sessionId": conversation_id,
-            "streaming": True
+            "sessionId": f"ed{conversation_id.replace('-', '')}",  # Format: ed<uuid_no_dashes>
+            "streaming": False  # Set to false for non-streaming
         }
 
         FLOWISE_PREDICTION_URL = (
@@ -170,45 +170,43 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         }
         yield initial_message
 
-        content_buffer = ""
+        # Get full response from Flowise
         async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
             if chunk.startswith("data: "):
                 try:
                     data = json.loads(chunk[6:])
-                    if "choices" in data and len(data["choices"]) > 0:
-                        content = data["choices"][0]["delta"].get("content", "")
-                        if content:
-                            content_buffer += content
-                            # Update message with accumulated content
-                            yield {
-                                "event": "message",
-                                "data": {
-                                    "object": "message",
-                                    "id": message_id,
-                                    "model": body.get("model"),
-                                    "role": "assistant",
-                                    "content": content_buffer,
-                                    "created_at": int(time.time()),
-                                    "parent_id": parent_id,  # Add parent message ID
-                                    "assistant": {
-                                        "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
-                                        "name": "Thrive - Test Agent",
-                                        "expertise": "Ai Agent for Thrive",
-                                        "description": "Leverages Custom LLM & Flowise to Enhance Chat Capabilities (beta)"
-                                    },
-                                    "conversation": {
-                                        "object": "conversation",
-                                        "id": conversation_id,
-                                        "visibility": 0,
-                                        "cost": 0,
-                                        "created_at": int(time.time()),
-                                        "updated_at": None,
-                                        "title": None,
-                                        "messages": []
-                                    }
+                    content = data.get("text", "")  # Non-streaming response has text field
+                    if content:
+                        # Send full message
+                        yield {
+                            "event": "message",
+                            "data": {
+                                "object": "message",
+                                "id": message_id,
+                                "model": body.get("model"),
+                                "role": "assistant",
+                                "content": content,
+                                "created_at": int(time.time()),
+                                "parent_id": parent_id,  # Add parent message ID
+                                "assistant": {
+                                    "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
+                                    "name": "Thrive - Test Agent",
+                                    "expertise": "Ai Agent for Thrive",
+                                    "description": "Leverages Custom LLM & Flowise to Enhance Chat Capabilities (beta)"
                                 },
-                                "id": str(int(time.time() * 1000))
-                            }
+                                "conversation": {
+                                    "object": "conversation",
+                                    "id": conversation_id,
+                                    "visibility": 0,
+                                    "cost": 0,
+                                    "created_at": int(time.time()),
+                                    "updated_at": None,
+                                    "title": None,
+                                    "messages": []
+                                }
+                            },
+                            "id": str(int(time.time() * 1000))
+                        }
                 except json.JSONDecodeError:
                     logger.error(f"Failed to parse chunk: {chunk}")
                     continue
