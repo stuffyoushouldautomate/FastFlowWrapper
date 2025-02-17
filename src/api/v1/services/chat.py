@@ -42,10 +42,18 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
                             data = json.loads(line)
                             logger.info(f"Parsed data: {data}")
                             
+                            # Handle both message array and direct text formats
+                            content = None
                             if isinstance(data, dict) and "text" in data:
                                 content = data["text"]
-                                
-                                # Format exactly as OpenAI for PHP client
+                            elif isinstance(data, list) and len(data) > 0:
+                                messages = data[0].get("messages", [])
+                                if messages and len(messages) > 1:
+                                    bot_message = messages[-1]
+                                    if bot_message["role"] == "bot":
+                                        content = bot_message["content"]
+
+                            if content:
                                 response = {
                                     "id": f"chatcmpl-{str(uuid.uuid4())}",
                                     "object": "chat.completion.chunk",
@@ -64,6 +72,7 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
                                 chunk = f"data: {json.dumps(response)}\n\n"
                                 logger.info(f"Sending chunk: {chunk}")
                                 yield chunk
+
                         except json.JSONDecodeError as e:
                             logger.error(f"JSON decode error: {e} for line: {line}")
                             continue
@@ -81,7 +90,6 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
                 "code": "500"
             }
         }
-        # Format error as SSE data line
         yield f"data: {json.dumps(error_response)}\n\n"
         yield "data: [DONE]\n\n"
 
