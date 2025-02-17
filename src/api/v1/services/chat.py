@@ -16,12 +16,22 @@ settings = get_settings()
 # In-memory store for conversation history
 conversation_history = {}
 
+def format_message_content(content: Any) -> str:
+    """Format message content into plain text"""
+    if isinstance(content, list):
+        # Extract text from message parts
+        return " ".join(
+            part["text"] for part in content 
+            if part.get("type") == "text" and "text" in part
+        )
+    return str(content)
+
 def summarize_history(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Format messages for Flowise history"""
     return [
         {
             "role": "user" if msg.get("role") == "user" else "bot",
-            "content": msg.get("content", ""),
+            "content": format_message_content(msg.get("content", "")),
             "time": msg.get("created_at", int(time.time()))
         }
         for msg in messages
@@ -120,17 +130,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         
         # Get the last message content properly
         last_message = messages[-1]
-        message_content = last_message.get("content", "")
-        
-        # Handle message content array format
-        if isinstance(message_content, list):
-            # Extract text from message parts
-            question = " ".join(
-                part["text"] for part in message_content 
-                if part.get("type") == "text" and "text" in part
-            )
-        else:
-            question = str(message_content)
+        question = format_message_content(last_message.get("content", ""))
         
         # Get parent message ID if available
         parent_id = last_message.get("parent_id")
@@ -141,6 +141,12 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         # Update conversation history
         if session_id not in conversation_history:
             conversation_history[session_id] = []
+            # Add initial system message
+            conversation_history[session_id].append({
+                "role": "bot",
+                "content": "Analyze user's message which will be sent and processed through flowise and tools to assist user with their requests. Uses AI Agent features and passes them back as a chat message to user.",
+                "time": int(time.time())
+            })
         conversation_history[session_id].extend(messages)
         
         # Prepare history for Flowise
