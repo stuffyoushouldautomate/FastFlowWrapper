@@ -14,13 +14,8 @@ logger = logging.getLogger("uvicorn.error")
 settings = get_settings()
 
 
-async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerator[str, None]:
+async def fetch_flowise_stream(flowise_url: str, payload: dict, headers: dict = None) -> AsyncGenerator[str, None]:
     try:
-        headers = {
-            "Authorization": f"Bearer {settings.api_key}",
-            "Content-Type": "application/json"
-        }
-        
         async with httpx.AsyncClient() as client:
             async with client.stream("POST", flowise_url, json=payload, headers=headers, timeout=30.0) as response:
                 response.raise_for_status()
@@ -120,20 +115,26 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         parent_id = last_message.get("parent_id")
         
         # Format request for Flowise
-        conversation_id = str(uuid.uuid4())  # Clean UUID for session ID
+        session_id = str(uuid.uuid4())  # Clean UUID for session ID
         flowise_request_data = {
             "question": question,
             "overrideConfig": {
                 "model": primary_model,
                 "systemMessage": "You are an AI assistant powered by Henjii Digital Era."
             },
-            "sessionId": f"ed{conversation_id.replace('-', '')}",  # Format: ed<uuid_no_dashes>
+            "sessionId": f"ed{session_id.replace('-', '')}",  # Format: ed<uuid_no_dashes>
             "streaming": False  # Set to false for non-streaming
         }
 
         FLOWISE_PREDICTION_URL = (
             f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
         )
+
+        # Add proper headers
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.api_key}"
+        }
 
         logger.info(f"Sending request to Flowise: {json.dumps(flowise_request_data)}")
         
@@ -157,7 +158,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                 },
                 "conversation": {
                     "object": "conversation",
-                    "id": conversation_id,
+                    "id": session_id,  # Use same ID as session
                     "visibility": 0,
                     "cost": 0,
                     "created_at": int(time.time()),
@@ -171,7 +172,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         yield initial_message
 
         # Get full response from Flowise
-        async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
+        async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data, headers):
             if chunk.startswith("data: "):
                 try:
                     data = json.loads(chunk[6:])
@@ -196,7 +197,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                                 },
                                 "conversation": {
                                     "object": "conversation",
-                                    "id": conversation_id,
+                                    "id": session_id,  # Use same ID as session
                                     "visibility": 0,
                                     "cost": 0,
                                     "created_at": int(time.time()),
