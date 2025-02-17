@@ -143,7 +143,13 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                 "model": body.get("model"),
                 "role": "assistant",
                 "content": "",
-                "created_at": int(time.time())
+                "created_at": int(time.time()),
+                "assistant": {
+                    "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
+                    "name": "Thrive - Test Agent",
+                    "expertise": "Ai Agent for Thrive",
+                    "description": "Leverages Custom LLM & Flowise to Enhance Chat Capabilities (beta)"
+                }
             },
             "id": str(int(time.time() * 1000))
         }
@@ -152,36 +158,40 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         content_buffer = ""
         async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
             if chunk.startswith("data: "):
-                data = json.loads(chunk[6:])
-                if "choices" in data and len(data["choices"]) > 0:
-                    content = data["choices"][0]["delta"].get("content", "")
-                    if content:
-                        content_buffer += content
-                        # Update message with accumulated content
-                        yield {
-                            "event": "message",
-                            "data": {
-                                "object": "message",
-                                "id": message_id,
-                                "model": body.get("model"),
-                                "role": "assistant", 
-                                "content": content_buffer,
-                                "created_at": int(time.time())
-                            },
-                            "id": str(int(time.time() * 1000))
-                        }
+                try:
+                    data = json.loads(chunk[6:])
+                    if "choices" in data and len(data["choices"]) > 0:
+                        content = data["choices"][0]["delta"].get("content", "")
+                        if content:
+                            content_buffer += content
+                            # Update message with accumulated content
+                            yield {
+                                "event": "message",
+                                "data": {
+                                    "object": "message",
+                                    "id": message_id,
+                                    "model": body.get("model"),
+                                    "role": "assistant",
+                                    "content": content_buffer,
+                                    "created_at": int(time.time()),
+                                    "assistant": {
+                                        "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
+                                        "name": "Thrive - Test Agent",
+                                        "expertise": "Ai Agent for Thrive",
+                                        "description": "Leverages Custom LLM & Flowise to Enhance Chat Capabilities (beta)"
+                                    }
+                                },
+                                "id": str(int(time.time() * 1000))
+                            }
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to parse chunk: {chunk}")
+                    continue
 
     except Exception as e:
         logger.error(f"Error in handle_chat_completion: {e}")
         yield {
-            "event": "message",
-            "data": {
-                "error": {
-                    "message": str(e),
-                    "type": "server_error",
-                    "code": "500"
-                }
-            },
+            "event": "error",
+            "data": str(e),
             "id": str(int(time.time() * 1000))
         }
 
