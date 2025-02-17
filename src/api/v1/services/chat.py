@@ -1,5 +1,4 @@
 from typing import AsyncGenerator, Dict, Any, List
-import httpx
 import json
 from src.config.config import get_settings
 import logging
@@ -7,7 +6,7 @@ import time
 import uuid
 import asyncio
 from fastapi import HTTPException
-import requests
+import httpx
 import tiktoken
 from src.core.config import settings
 from src.core.logger import logger
