@@ -128,7 +128,17 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
             "question": question,  # Now properly extracted from message parts
             "overrideConfig": {
                 "model": primary_model,
-                "systemMessage": "You are an AI assistant powered by Henjii Digital Era."
+                "systemMessage": "You are an AI assistant powered by Henjii Digital Era.",
+                "memoryType": "Buffer Memory",
+                "source": "API/Embed",
+                "messages": [
+                    {
+                        "content": msg.get("content", ""),
+                        "role": "user" if msg.get("role") == "user" else "bot",
+                        "time": msg.get("created_at", int(time.time()))
+                    }
+                    for msg in messages
+                ]
             },
             "sessionId": f"ed{session_id.replace('-', '')}",  # Format: ed<uuid_no_dashes>
             "streaming": False  # Set to false for non-streaming
@@ -186,26 +196,29 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                     data = json.loads(chunk[6:])
                     content = data.get("text", "")  # Non-streaming response has text field
                     if content:
-                        # Send full message
-                        yield {
+                        # Format response to match chat app
+                        response_data = {
                             "event": "message",
                             "data": {
                                 "object": "message",
                                 "id": message_id,
                                 "model": body.get("model"),
                                 "role": "assistant",
-                                "content": content,
+                                "content": [{
+                                    "type": "text",
+                                    "text": content
+                                }],
                                 "created_at": int(time.time()),
-                                "parent_id": parent_id,  # Add parent message ID
+                                "parent_id": parent_id,
                                 "assistant": {
                                     "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
-                                    "name": "Thrive - Test Agent",
+                                    "name": "Thrive - Test Agent", 
                                     "expertise": "Ai Agent for Thrive",
                                     "description": "Leverages Custom LLM & Flowise to Enhance Chat Capabilities (beta)"
                                 },
                                 "conversation": {
                                     "object": "conversation",
-                                    "id": session_id,  # Use same ID as session
+                                    "id": session_id,
                                     "visibility": 0,
                                     "cost": 0,
                                     "created_at": int(time.time()),
@@ -216,6 +229,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                             },
                             "id": str(int(time.time() * 1000))
                         }
+                        yield response_data
                 except json.JSONDecodeError:
                     logger.error(f"Failed to parse chunk: {chunk}")
                     continue
