@@ -107,9 +107,17 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         
         # Get the last message content properly
         last_message = messages[-1]
-        question = last_message.get("content", "")
-        if isinstance(question, dict):  # Handle if content is an object
-            question = json.dumps(question)  # Convert dict to string
+        message_content = last_message.get("content", "")
+        
+        # Handle message content array format
+        if isinstance(message_content, list):
+            # Extract text from message parts
+            question = " ".join(
+                part["text"] for part in message_content 
+                if part.get("type") == "text" and "text" in part
+            )
+        else:
+            question = str(message_content)
         
         # Get parent message ID if available
         parent_id = last_message.get("parent_id")
@@ -117,7 +125,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         # Format request for Flowise
         session_id = str(uuid.uuid4())  # Clean UUID for session ID
         flowise_request_data = {
-            "question": question,
+            "question": question,  # Now properly extracted from message parts
             "overrideConfig": {
                 "model": primary_model,
                 "systemMessage": "You are an AI assistant powered by Henjii Digital Era."
