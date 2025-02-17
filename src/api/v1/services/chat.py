@@ -9,6 +9,8 @@ import asyncio
 from fastapi import HTTPException
 import requests
 import tiktoken
+from src.core.config import settings
+from src.core.logger import logger
 
 logger = logging.getLogger("uvicorn.error")
 settings = get_settings()
@@ -37,129 +39,42 @@ def summarize_history(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for msg in messages
     ]
 
-async def fetch_flowise_stream(flowise_url: str, payload: dict, headers: dict = None) -> AsyncGenerator[str, None]:
-    try:
-        async with httpx.AsyncClient() as client:
-            async with client.stream("POST", flowise_url, json=payload, headers=headers, timeout=30.0) as response:
-                response.raise_for_status()
-                logger.info("Connected to Flowise stream")
-
-                buffer = ""
-                async for chunk in response.aiter_text():
-                    logger.info(f"Raw chunk received: {chunk}")
-                    buffer += chunk
-
-                    while "\n" in buffer:
-                        line, buffer = buffer.split("\n", 1)
-                        line = line.strip()
-                        
-                        if not line:
-                            continue
-
-                        try:
-                            data = json.loads(line)
-                            logger.info(f"Parsed data: {data}")
-                            
-                            # Handle both message array and direct text formats
-                            content = None
-                            if isinstance(data, dict) and "text" in data:
-                                content = data["text"]
-                            elif isinstance(data, list) and len(data) > 0:
-                                messages = data[0].get("messages", [])
-                                if messages and len(messages) > 1:
-                                    bot_message = messages[-1]
-                                    if bot_message["role"] == "bot":
-                                        content = bot_message["content"]
-
-                            if content:
-                                response = {
-                                    "id": f"chatcmpl-{str(uuid.uuid4())}",
-                                    "object": "chat.completion.chunk",
-                                    "created": int(time.time()),
-                                    "model": "henjii/gpt-4o",
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {
-                                            "content": content
-                                        },
-                                        "finish_reason": None
-                                    }]
-                                }
-                                
-                                # Format as SSE data line
-                                chunk = f"data: {json.dumps(response)}\n\n"
-                                logger.info(f"Sending chunk: {chunk}")
-                                yield chunk
-
-                        except json.JSONDecodeError as e:
-                            logger.error(f"JSON decode error: {e} for line: {line}")
-                            continue
-
-                # Send proper DONE message
-                yield "data: [DONE]\n\n"
-                return
-
-    except Exception as e:
-        logger.error(f"Error in fetch_flowise_stream: {e}")
-        error_response = {
-            "error": {
-                "message": str(e),
-                "type": "server_error",
-                "code": "500"
-            }
-        }
-        yield f"data: {json.dumps(error_response)}\n\n"
-        yield "data: [DONE]\n\n"
-
+async def fetch_flowise_stream(flowise_url: str, payload: dict, headers: dict) -> AsyncGenerator[str, None]:
+    """Simple passthrough to Flowise"""
+    async with httpx.AsyncClient() as client:
+        async with client.stream("POST", flowise_url, json=payload, headers=headers, timeout=30.0) as response:
+            async for chunk in response.aiter_text():
+                if chunk:
+                    yield chunk
 
 async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+    """Handle chat completion request"""
     try:
+        # Get the last message content
         messages = body.get("messages", [])
         if not messages:
-            raise ValueError("No messages provided in the request.")
-
-        # First yield empty token event
-        yield {
-            "event": "token",
-            "data": "",
-            "id": str(int(time.time() * 1000))
-        }
-
-        # Get model preferences and strip provider prefix if present
-        primary_model = body.get("model", "").split("/")[-1]  # Strip provider prefix
-        
-        # Get the last message content properly
+            raise ValueError("No messages provided")
+            
         last_message = messages[-1]
-        question = format_message_content(last_message.get("content", ""))
+        content = last_message.get("content", "")
         
-        # Get parent message ID if available
-        parent_id = last_message.get("parent_id")
-        
+        # Extract text if it's an array of message parts
+        if isinstance(content, list):
+            question = " ".join(
+                part["text"] for part in content 
+                if part.get("type") == "text" and "text" in part
+            )
+        else:
+            question = str(content)
+
         # Format request for Flowise
         session_id = f"ed{str(uuid.uuid4()).replace('-', '')}"
-        
-        # Update conversation history
-        if session_id not in conversation_history:
-            conversation_history[session_id] = []
-            # Add initial system message
-            conversation_history[session_id].append({
-                "role": "bot",
-                "content": "Analyze user's message which will be sent and processed through flowise and tools to assist user with their requests. Uses AI Agent features and passes them back as a chat message to user.",
-                "time": int(time.time())
-            })
-        conversation_history[session_id].extend(messages)
-        
-        # Prepare history for Flowise
-        history = summarize_history(conversation_history[session_id])
-        
         flowise_request_data = {
             "question": question,
             "overrideConfig": {
-                "model": primary_model,
                 "systemMessage": "You are an AI assistant powered by Henjii Digital Era.",
                 "memoryType": "Buffer Memory",
                 "source": "API/Embed",
-                "messages": history,  # Pass full conversation history
                 "sessionId": session_id,
                 "memoryKey": session_id
             },
@@ -167,108 +82,48 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
             "streaming": False
         }
 
+        # Prepare Flowise request
         FLOWISE_PREDICTION_URL = (
             f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
         )
-
-        # Add proper headers
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {settings.api_key}"
         }
 
-        logger.info(f"Sending request to Flowise: {json.dumps(flowise_request_data)}")
-        
-        # Create initial message event with conversation
-        message_id = str(uuid.uuid4())
-        initial_message = {
-            "event": "message",
-            "data": {
-                "object": "message",
-                "id": message_id,
-                "model": body.get("model"),
-                "role": "assistant",
-                "content": [{
-                    "type": "text",
-                    "text": ""
-                }],
-                "created_at": int(time.time()),
-                "parent_id": parent_id,
-                "assistant": {
-                    "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
-                    "name": "Thrive - Test Agent",
-                    "expertise": "Ai Agent for Thrive",
-                    "description": "Leverages Custom LLM & Flowise to Enhance Chat Capabilities (beta)"
-                },
-                "conversation": {
-                    "object": "conversation",
-                    "id": session_id,
-                    "visibility": 0,
-                    "cost": 0,
-                    "created_at": int(time.time()),
-                    "updated_at": None,
-                    "title": None,
-                    "messages": history  # Include history in response
-                }
-            },
-            "id": str(int(time.time() * 1000))
-        }
-        yield initial_message
+        logger.info(f"Sending to Flowise: {json.dumps(flowise_request_data)}")
 
-        # Get full response from Flowise
+        # Stream response from Flowise
         async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data, headers):
             if chunk.startswith("data: "):
                 try:
                     data = json.loads(chunk[6:])
                     content = data.get("text", "")
                     if content:
-                        # Update history with assistant's response
-                        conversation_history[session_id].append({
-                            "role": "assistant",
-                            "content": content,
-                            "created_at": int(time.time())
-                        })
-                        
-                        # Format response to match chat app
-                        response_data = {
+                        # Format as SSE message
+                        response = {
                             "event": "message",
-                            "data": {
+                            "data": json.dumps({
+                                "id": str(uuid.uuid4()),
                                 "object": "message",
-                                "id": message_id,
-                                "model": body.get("model"),
-                                "role": "assistant", 
+                                "created_at": int(time.time()),
+                                "model": body.get("model", ""),
                                 "content": [{
                                     "type": "text",
                                     "text": content
-                                }],
-                                "created_at": int(time.time()),
-                                "parent_id": parent_id,
-                                "assistant": {
-                                    "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
-                                    "name": "Thrive - Test Agent",
-                                    "expertise": "Ai Agent for Thrive",
-                                    "description": "Leverages Custom LLM & Flowise to Enhance Chat Capabilities (beta)"
-                                },
-                                "conversation": {
-                                    "object": "conversation",
-                                    "id": session_id,
-                                    "visibility": 0,
-                                    "cost": 0,
-                                    "created_at": int(time.time()),
-                                    "updated_at": None,
-                                    "title": None,
-                                    "messages": history  # Include updated history
-                                }
-                            },
+                                }]
+                            }),
                             "id": str(int(time.time() * 1000))
                         }
-                        yield response_data
-                except json.JSONDecodeError:
-                    logger.error(f"Failed to parse chunk: {chunk}")
+                        logger.info(f"Sending response: {json.dumps(response)}")
+                        yield response
+
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON parse error: {e}")
                     continue
 
     except Exception as e:
-        logger.error(f"Error in handle_chat_completion: {e}")
+        logger.error(f"Error: {e}")
         yield {
             "event": "error",
             "data": str(e),

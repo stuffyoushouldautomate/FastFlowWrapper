@@ -38,20 +38,11 @@ async def get_model(model_id: str):
 async def create_chat_completion(
     body: Dict[str, Any] = Body(...),
 ):
-    """Create a chat completion"""
-    # Check for both stream and streaming parameters
-    is_streaming = body.get("stream", False) or body.get("streaming", False)
-    
-    if is_streaming:
-        return EventSourceResponse(
-            handle_chat_completion(body),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
-        )
-    return await handle_chat_completion_sync(body)
+    """OpenAI-compatible chat completion endpoint"""
+    return EventSourceResponse(
+        handle_chat_completion(body),
+        media_type="text/event-stream"
+    )
 
 
 # Embeddings endpoint
