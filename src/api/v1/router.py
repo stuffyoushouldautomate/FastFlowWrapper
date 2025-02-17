@@ -92,3 +92,9 @@ async def create_image(request: ImageRequest):
         status_code=501,
         detail="Image generation not implemented"
     )
+
+
+@router.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "ok"}

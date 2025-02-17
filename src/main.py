@@ -43,3 +43,9 @@ async def health_check():
 @app.get("/")
 async def read_root():
     return {"status": "ok", "message": "FastAPI Flowise Wrapper is running"}
+
+# Add root health check
+@app.get("/health")
+async def root_health_check():
+    """Root health check endpoint"""
+    return {"status": "ok"}
