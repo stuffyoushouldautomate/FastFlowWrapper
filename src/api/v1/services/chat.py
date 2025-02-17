@@ -117,13 +117,14 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
             question = json.dumps(question)  # Convert dict to string
         
         # Format request for Flowise
+        conversation_id = f"thread_{str(uuid.uuid4()).replace('-', '')}"
         flowise_request_data = {
             "question": question,
             "overrideConfig": {
                 "model": primary_model,
                 "systemMessage": "You are an AI assistant powered by Henjii Digital Era."
             },
-            "sessionId": f"thread_{str(uuid.uuid4()).replace('-', '')}",
+            "sessionId": conversation_id,
             "streaming": True
         }
 
@@ -133,7 +134,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
 
         logger.info(f"Sending request to Flowise: {json.dumps(flowise_request_data)}")
         
-        # Create initial message event
+        # Create initial message event with conversation
         message_id = str(uuid.uuid4())
         initial_message = {
             "event": "message",
@@ -149,6 +150,16 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                     "name": "Thrive - Test Agent",
                     "expertise": "Ai Agent for Thrive",
                     "description": "Leverages Custom LLM & Flowise to Enhance Chat Capabilities (beta)"
+                },
+                "conversation": {
+                    "object": "conversation",
+                    "id": conversation_id,
+                    "visibility": 0,
+                    "cost": 0,
+                    "created_at": int(time.time()),
+                    "updated_at": None,
+                    "title": None,
+                    "messages": []
                 }
             },
             "id": str(int(time.time() * 1000))
@@ -179,6 +190,16 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                                         "name": "Thrive - Test Agent",
                                         "expertise": "Ai Agent for Thrive",
                                         "description": "Leverages Custom LLM & Flowise to Enhance Chat Capabilities (beta)"
+                                    },
+                                    "conversation": {
+                                        "object": "conversation",
+                                        "id": conversation_id,
+                                        "visibility": 0,
+                                        "cost": 0,
+                                        "created_at": int(time.time()),
+                                        "updated_at": None,
+                                        "title": None,
+                                        "messages": []
                                     }
                                 },
                                 "id": str(int(time.time() * 1000))
