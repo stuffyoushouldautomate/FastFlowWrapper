@@ -95,9 +95,15 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, No
         # Get model preferences and strip provider prefix if present
         primary_model = body.get("model", "").split("/")[-1]  # Strip provider prefix
         
+        # Get the last message content properly
+        last_message = messages[-1]
+        question = last_message.get("content", "")
+        if isinstance(question, dict):  # Handle if content is an object
+            question = json.dumps(question)  # Convert dict to string
+        
         # Format request for Flowise
         flowise_request_data = {
-            "question": messages[-1]["content"],
+            "question": question,
             "overrideConfig": {
                 "model": primary_model,
                 "systemMessage": "You are an AI assistant powered by Henjii Digital Era."
@@ -117,7 +123,15 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, No
 
     except Exception as e:
         logger.error(f"Error in handle_chat_completion: {e}")
-        yield f'data: {{"error": "Error: {str(e)}"}}\n\n'
+        error_response = {
+            "error": {
+                "message": str(e),
+                "type": "server_error",
+                "code": "500"
+            }
+        }
+        yield f"data: {json.dumps(error_response)}\n\n"
+        yield "data: [DONE]\n\n"
 
 
 def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
