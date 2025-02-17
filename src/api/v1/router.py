@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Body, HTTPException, Request
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, EventSourceResponse
 from src.api.v1.services.models import get_openai_models
 from src.api.v1.services.chat import (
     handle_chat_completion,
@@ -42,14 +42,12 @@ async def create_chat_completion(
     is_streaming = body.get("stream", False) or body.get("streaming", False)
     
     if is_streaming:
-        return StreamingResponse(
+        return EventSourceResponse(
             handle_chat_completion(body),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "Content-Type": "text/event-stream",
-                "Transfer-Encoding": "chunked"
             }
         )
     return await handle_chat_completion_sync(body)

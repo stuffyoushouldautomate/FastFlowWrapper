@@ -94,11 +94,18 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict) -> AsyncGenerato
         yield "data: [DONE]\n\n"
 
 
-async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
+async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
     try:
         messages = body.get("messages", [])
         if not messages:
             raise ValueError("No messages provided in the request.")
+
+        # First yield empty token event
+        yield {
+            "event": "token",
+            "data": "",
+            "id": str(int(time.time() * 1000))
+        }
 
         # Get model preferences and strip provider prefix if present
         primary_model = body.get("model", "").split("/")[-1]  # Strip provider prefix
@@ -126,20 +133,57 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, No
 
         logger.info(f"Sending request to Flowise: {json.dumps(flowise_request_data)}")
         
+        # Create initial message event
+        message_id = str(uuid.uuid4())
+        initial_message = {
+            "event": "message",
+            "data": {
+                "object": "message",
+                "id": message_id,
+                "model": body.get("model"),
+                "role": "assistant",
+                "content": "",
+                "created_at": int(time.time())
+            },
+            "id": str(int(time.time() * 1000))
+        }
+        yield initial_message
+
+        content_buffer = ""
         async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data):
-            yield chunk
+            if chunk.startswith("data: "):
+                data = json.loads(chunk[6:])
+                if "choices" in data and len(data["choices"]) > 0:
+                    content = data["choices"][0]["delta"].get("content", "")
+                    if content:
+                        content_buffer += content
+                        # Update message with accumulated content
+                        yield {
+                            "event": "message",
+                            "data": {
+                                "object": "message",
+                                "id": message_id,
+                                "model": body.get("model"),
+                                "role": "assistant", 
+                                "content": content_buffer,
+                                "created_at": int(time.time())
+                            },
+                            "id": str(int(time.time() * 1000))
+                        }
 
     except Exception as e:
         logger.error(f"Error in handle_chat_completion: {e}")
-        error_response = {
-            "error": {
-                "message": str(e),
-                "type": "server_error",
-                "code": "500"
-            }
+        yield {
+            "event": "message",
+            "data": {
+                "error": {
+                    "message": str(e),
+                    "type": "server_error",
+                    "code": "500"
+                }
+            },
+            "id": str(int(time.time() * 1000))
         }
-        yield f"data: {json.dumps(error_response)}\n\n"
-        yield "data: [DONE]\n\n"
 
 
 def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
