@@ -1,4 +1,4 @@
-from typing import AsyncGenerator, Dict, Any
+from typing import AsyncGenerator, Dict, Any, List
 import httpx
 import json
 from src.config.config import get_settings
@@ -13,6 +13,19 @@ import tiktoken
 logger = logging.getLogger("uvicorn.error")
 settings = get_settings()
 
+# In-memory store for conversation history
+conversation_history = {}
+
+def summarize_history(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Format messages for Flowise history"""
+    return [
+        {
+            "role": "user" if msg.get("role") == "user" else "bot",
+            "content": msg.get("content", ""),
+            "time": msg.get("created_at", int(time.time()))
+        }
+        for msg in messages
+    ]
 
 async def fetch_flowise_stream(flowise_url: str, payload: dict, headers: dict = None) -> AsyncGenerator[str, None]:
     try:
@@ -123,25 +136,29 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         parent_id = last_message.get("parent_id")
         
         # Format request for Flowise
-        session_id = str(uuid.uuid4())  # Clean UUID for session ID
+        session_id = f"ed{str(uuid.uuid4()).replace('-', '')}"
+        
+        # Update conversation history
+        if session_id not in conversation_history:
+            conversation_history[session_id] = []
+        conversation_history[session_id].extend(messages)
+        
+        # Prepare history for Flowise
+        history = summarize_history(conversation_history[session_id])
+        
         flowise_request_data = {
-            "question": question,  # Now properly extracted from message parts
+            "question": question,
             "overrideConfig": {
                 "model": primary_model,
                 "systemMessage": "You are an AI assistant powered by Henjii Digital Era.",
                 "memoryType": "Buffer Memory",
                 "source": "API/Embed",
-                "messages": [
-                    {
-                        "content": msg.get("content", ""),
-                        "role": "user" if msg.get("role") == "user" else "bot",
-                        "time": msg.get("created_at", int(time.time()))
-                    }
-                    for msg in messages
-                ]
+                "messages": history,  # Pass full conversation history
+                "sessionId": session_id,
+                "memoryKey": session_id
             },
-            "sessionId": f"ed{session_id.replace('-', '')}",  # Format: ed<uuid_no_dashes>
-            "streaming": False  # Set to false for non-streaming
+            "sessionId": session_id,
+            "streaming": False
         }
 
         FLOWISE_PREDICTION_URL = (
@@ -165,9 +182,12 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                 "id": message_id,
                 "model": body.get("model"),
                 "role": "assistant",
-                "content": "",
+                "content": [{
+                    "type": "text",
+                    "text": ""
+                }],
                 "created_at": int(time.time()),
-                "parent_id": parent_id,  # Add parent message ID
+                "parent_id": parent_id,
                 "assistant": {
                     "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
                     "name": "Thrive - Test Agent",
@@ -176,13 +196,13 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                 },
                 "conversation": {
                     "object": "conversation",
-                    "id": session_id,  # Use same ID as session
+                    "id": session_id,
                     "visibility": 0,
                     "cost": 0,
                     "created_at": int(time.time()),
                     "updated_at": None,
                     "title": None,
-                    "messages": []
+                    "messages": history  # Include history in response
                 }
             },
             "id": str(int(time.time() * 1000))
@@ -194,8 +214,15 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
             if chunk.startswith("data: "):
                 try:
                     data = json.loads(chunk[6:])
-                    content = data.get("text", "")  # Non-streaming response has text field
+                    content = data.get("text", "")
                     if content:
+                        # Update history with assistant's response
+                        conversation_history[session_id].append({
+                            "role": "assistant",
+                            "content": content,
+                            "created_at": int(time.time())
+                        })
+                        
                         # Format response to match chat app
                         response_data = {
                             "event": "message",
@@ -203,7 +230,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                                 "object": "message",
                                 "id": message_id,
                                 "model": body.get("model"),
-                                "role": "assistant",
+                                "role": "assistant", 
                                 "content": [{
                                     "type": "text",
                                     "text": content
@@ -212,7 +239,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                                 "parent_id": parent_id,
                                 "assistant": {
                                     "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
-                                    "name": "Thrive - Test Agent", 
+                                    "name": "Thrive - Test Agent",
                                     "expertise": "Ai Agent for Thrive",
                                     "description": "Leverages Custom LLM & Flowise to Enhance Chat Capabilities (beta)"
                                 },
@@ -224,7 +251,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                                     "created_at": int(time.time()),
                                     "updated_at": None,
                                     "title": None,
-                                    "messages": []
+                                    "messages": history  # Include updated history
                                 }
                             },
                             "id": str(int(time.time() * 1000))
