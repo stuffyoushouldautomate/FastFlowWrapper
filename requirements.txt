@@ -5,4 +5,5 @@ pydantic-settings>=2.1.0
 requests==2.31.0
 httpx==0.26.0
 python-dotenv==1.0.0  # For .env file support
-tiktoken==0.6.0  # Add this for token counting 
+tiktoken==0.6.0  # Add this for token counting
+sse-starlette 

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Body, HTTPException, Request
-from fastapi.responses import StreamingResponse, JSONResponse, EventSourceResponse
+from fastapi.responses import StreamingResponse, JSONResponse
+from sse_starlette.sse import EventSourceResponse
 from src.api.v1.services.models import get_openai_models
 from src.api.v1.services.chat import (
     handle_chat_completion,
