@@ -35,6 +35,7 @@ async def auth_middleware(request: Request, call_next):
 # Include API routes
 app.include_router(api_router)
 
+# Single health check endpoint
 @app.get("/health")
 async def health_check():
     logger.info("Health check called")
@@ -43,9 +44,3 @@ async def health_check():
 @app.get("/")
 async def read_root():
     return {"status": "ok", "message": "FastAPI Flowise Wrapper is running"}
-
-# Add root health check
-@app.get("/health")
-async def root_health_check():
-    """Root health check endpoint"""
-    return {"status": "ok"}
