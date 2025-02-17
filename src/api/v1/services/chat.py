@@ -116,6 +116,9 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
         if isinstance(question, dict):  # Handle if content is an object
             question = json.dumps(question)  # Convert dict to string
         
+        # Get parent message ID if available
+        parent_id = last_message.get("parent_id")
+        
         # Format request for Flowise
         conversation_id = f"thread_{str(uuid.uuid4()).replace('-', '')}"
         flowise_request_data = {
@@ -145,6 +148,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                 "role": "assistant",
                 "content": "",
                 "created_at": int(time.time()),
+                "parent_id": parent_id,  # Add parent message ID
                 "assistant": {
                     "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
                     "name": "Thrive - Test Agent",
@@ -185,6 +189,7 @@ async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[st
                                     "role": "assistant",
                                     "content": content_buffer,
                                     "created_at": int(time.time()),
+                                    "parent_id": parent_id,  # Add parent message ID
                                     "assistant": {
                                         "id": "01950f8b-4b88-70cf-84a9-ec2314c563a7",
                                         "name": "Thrive - Test Agent",
