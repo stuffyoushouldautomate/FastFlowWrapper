@@ -10,12 +10,17 @@ import httpx
 import tiktoken
 from src.core.config import settings
 from src.core.logger import logger
+import os
+import aiohttp
 
 logger = logging.getLogger("uvicorn.error")
 settings = get_settings()
 
 # In-memory store for conversation history
 conversation_history = {}
+
+FLOWISE_API_URL = os.getenv("FLOWISE_API_URL", "http://localhost:3000/api/v1")
+FLOWISE_API_KEY = os.getenv("FLOWISE_API_KEY", "")
 
 def format_message_content(content: Any) -> str:
     """Format message content into plain text"""
@@ -46,89 +51,22 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, headers: dict) -
                 if chunk:
                     yield chunk
 
-async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
-    """Handle chat completion request"""
-    try:
-        # Get the last message content
-        messages = body.get("messages", [])
-        if not messages:
-            raise ValueError("No messages provided")
-            
-        last_message = messages[-1]
-        content = last_message.get("content", "")
-        
-        # Extract text if it's an array of message parts
-        if isinstance(content, list):
-            question = " ".join(
-                part["text"] for part in content 
-                if part.get("type") == "text" and "text" in part
-            )
-        else:
-            question = str(content)
-
-        # Format request for Flowise
-        session_id = f"ed{str(uuid.uuid4()).replace('-', '')}"
-        flowise_request_data = {
-            "question": question,
-            "overrideConfig": {
-                "systemMessage": "You are an AI assistant powered by Henjii Digital Era.",
-                "memoryType": "Buffer Memory",
-                "source": "API/Embed",
-                "sessionId": session_id,
-                "memoryKey": session_id
-            },
-            "sessionId": session_id,
-            "streaming": False
-        }
-
-        # Prepare Flowise request
-        FLOWISE_PREDICTION_URL = (
-            f"{settings.flowise_api_base_url}/prediction/{settings.flowise_chatflow_id}"
-        )
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.api_key}"
-        }
-
-        logger.info(f"Sending to Flowise: {json.dumps(flowise_request_data)}")
-
-        # Stream response from Flowise
-        async for chunk in fetch_flowise_stream(FLOWISE_PREDICTION_URL, flowise_request_data, headers):
-            if chunk.startswith("data: "):
-                try:
-                    data = json.loads(chunk[6:])
-                    content = data.get("text", "")
-                    if content:
-                        # Format as SSE message
-                        response = {
-                            "event": "message",
-                            "data": json.dumps({
-                                "id": str(uuid.uuid4()),
-                                "object": "message",
-                                "created_at": int(time.time()),
-                                "model": body.get("model", ""),
-                                "content": [{
-                                    "type": "text",
-                                    "text": content
-                                }]
-                            }),
-                            "id": str(int(time.time() * 1000))
-                        }
-                        logger.info(f"Sending response: {json.dumps(response)}")
-                        yield response
-
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON parse error: {e}")
-                    continue
-
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        yield {
-            "event": "error",
-            "data": str(e),
-            "id": str(int(time.time() * 1000))
-        }
-
+async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
+    """Handle chat completion by forwarding to Flowise"""
+    headers = {
+        "Authorization": f"Bearer {FLOWISE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{FLOWISE_API_URL}/prediction/stream",
+            headers=headers,
+            json=body
+        ) as response:
+            async for chunk in response.content:
+                if chunk:
+                    yield f"data: {chunk.decode()}\n\n"
 
 def fetch_flowise_response(flowise_url: str, payload: dict) -> Dict[str, Any]:
     try:

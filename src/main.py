@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger("uvicorn")
 
 app = FastAPI(
-    title="Flowise OpenAI Wrapper",
+    title="henjii",
     description="A FastAPI application that converts Flowise APIs to OpenAI standards.",
     version="1.0.0",
 )

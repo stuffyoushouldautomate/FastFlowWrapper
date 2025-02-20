@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.api.v1.router import router
 
-app = FastAPI(title="FastFlowWrapper")
+app = FastAPI(title="henjii")
 
 # Add CORS middleware
 app.add_middleware(
