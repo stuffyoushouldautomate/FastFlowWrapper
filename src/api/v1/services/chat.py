@@ -54,13 +54,13 @@ async def fetch_flowise_stream(flowise_url: str, payload: dict, headers: dict) -
 async def handle_chat_completion(body: Dict[str, Any]) -> AsyncGenerator[str, None]:
     """Handle chat completion by forwarding to Flowise"""
     headers = {
-        "Authorization": f"Bearer {FLOWISE_API_KEY}",
+        "Authorization": f"Bearer {os.getenv('FLOWISE_API_KEY')}",
         "Content-Type": "application/json"
     }
     
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{FLOWISE_API_URL}/prediction/stream",
+            f"{os.getenv('FLOWISE_API_URL')}/prediction/stream",
             headers=headers,
             json=body
         ) as response:

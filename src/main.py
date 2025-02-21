@@ -7,15 +7,15 @@ import logging
 logger = logging.getLogger("uvicorn")
 
 app = FastAPI(
-    title="henjii",
-    description="A FastAPI application that converts Flowise APIs to OpenAI standards.",
-    version="1.0.0",
+    title="FastFlow API",
+    description="FastAPI wrapper for Flowise",
+    version="1.0.0"
 )
 
-# Add CORS middleware
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Adjust this in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,5 +42,5 @@ async def health_check():
     return {"status": "healthy"}
 
 @app.get("/")
-async def read_root():
-    return {"status": "ok", "message": "FastAPI Flowise Wrapper is running"}
+async def root():
+    return {"message": "FastFlow API is running"}
